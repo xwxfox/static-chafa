@@ -30,7 +30,7 @@ const gsf = dlopen("libglib-2.0.so.0", {
 const gifBuf = new Uint8Array(fs.readFileSync(GIF_PATH));
 console.log(`\nDecoding ${GIF_PATH}...`);
 const decodeStart = performance.now();
-const gif = await decodeGif(gifBuf, MAX_FRAMES);
+const gif = decodeGif(gifBuf, MAX_FRAMES);
 const decodeTime = performance.now() - decodeStart;
 
 console.log(`${gif.width}x${gif.height}, ${gif.frames.length} frames, native delays ~${gif.frames[0]!.delayMs}ms`);

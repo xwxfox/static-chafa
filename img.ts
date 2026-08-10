@@ -63,7 +63,7 @@ const jpgImg = decodeJpeg(jpgBuf);
 console.log(renderImageToTerminal(new Uint8Array(jpgImg.data), jpgImg.width, jpgImg.height, W, H));
 console.log("=== JPEG ↑\n");
 
-const gifData = await decodeGif(gifBuf);
+const gifData = decodeGif(gifBuf);
 const gifFrame = gifData.frames[0]!;
 console.log(renderImageToTerminal(gifFrame.data, gifFrame.width, gifFrame.height, W, H));
 console.log("=== GIF ↑\n");
@@ -71,13 +71,12 @@ console.log("=== GIF ↑\n");
 // ── Benchmark ──
 console.log(`=== Bench (${runs}x avg)   →  terminal ${W}x${H}  ===\n`);
 
-async function benchFormat(label: string, fn: () => any) {
+function benchFormat(label: string, fn: () => any) {
     let parseSum = 0, idatSum = 0, inflateSum = 0, defilterSum = 0, drawSum = 0, ansiSum = 0;
     const cfg = makeCfg();
     const canvas = cs.chafa_canvas_new(cfg);
     for (let i = 0; i < runs; i++) {
-        const raw = fn();
-        const img = raw instanceof Promise ? await raw : raw;
+        const img = fn();
         parseSum += img.stats.parseMs;
         idatSum += img.stats.idatMs;
         inflateSum += img.stats.inflateMs;
@@ -95,10 +94,10 @@ async function benchFormat(label: string, fn: () => any) {
     console.log(`${label}: decode ${decodeTotal.toFixed(2)}ms + render ${renderTotal.toFixed(2)}ms = ${total.toFixed(2)}ms → ${(1000/total).toFixed(0)}fps`);
 }
 
-await benchFormat("PNG ", () => decodePng(pngBuf));
-await benchFormat("JPEG", () => decodeJpeg(jpgBuf));
-await benchFormat("GIF ", async () => {
-    const g = await decodeGif(gifBuf);
+benchFormat("PNG ", () => decodePng(pngBuf));
+benchFormat("JPEG", () => decodeJpeg(jpgBuf));
+benchFormat("GIF ", () => {
+    const g = decodeGif(gifBuf);
     const f = g.frames[0]!;
     return { stats: g.stats, data: f.data, width: f.width, height: f.height };
 });

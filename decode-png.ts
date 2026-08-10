@@ -6,7 +6,6 @@
  */
 
 import { dlopen, FFIType, ptr } from "bun:ffi";
-import sharp from "sharp";
 
 export interface DecodeStats {
     parseMs: number;
@@ -61,17 +60,13 @@ const nativeDefilter = dlopen("defilter.so", {
         args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.ptr],
         returns: FFIType.i32,
     },
-    decode_gif_frame: {
-        args: [FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.ptr, FFIType.i32],
+    decode_gif_to_rgba: {
+        args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.ptr],
         returns: FFIType.i32,
-    },
-    expand_palette_to_rgba: {
-        args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.i32],
-        returns: FFIType.void,
     },
 });
 
-const { inflate_zlib, defilter, defilter_rgb_to_rgba, decode_jpeg_to_rgba, decode_gif_frame, expand_palette_to_rgba } = nativeDefilter.symbols;
+const { inflate_zlib, defilter, defilter_rgb_to_rgba, decode_jpeg_to_rgba, decode_gif_to_rgba } = nativeDefilter.symbols;
 
 type Bufs = {
     compressed: Uint8Array;
@@ -284,32 +279,41 @@ export interface GIFResult {
     stats: DecodeStats;
 }
 
-export async function decodeGif(buf: Uint8Array, maxFrames?: number): Promise<GIFResult> {
-    let t0 = performance.now();
+let _gifPool: Uint8Array | null = null;
 
-    const meta = await sharp(buf, { animated: true }).metadata();
-    const width = meta.width!;
-    const height = meta.pageHeight!;
-    const frameCount = maxFrames ? Math.min(meta.pages!, maxFrames) : meta.pages!;
-    const delays: number[] = (meta.delay as number[]) || [];
-    const loopCount = meta.loop || 0;
-    let tParse = performance.now();
+export function decodeGif(buf: Uint8Array, maxFrames?: number): GIFResult {
+    let t0 = performance.now();
+    if (!_gifPool) _gifPool = new Uint8Array(4 * 4096 * 4096);
+
+    const dims = new Int32Array(4);
+    const wView = new Int32Array(dims.buffer, dims.byteOffset, 1);
+    const hView = new Int32Array(dims.buffer, dims.byteOffset + 4, 1);
+    const fcView = new Int32Array(dims.buffer, dims.byteOffset + 8, 1);
+    const delays = new Int32Array(maxFrames || 500);
 
     const frames: GIFFrame[] = [];
-    let totalDecode = 0;
+    const result = decode_gif_to_rgba(
+        ptr(buf), buf.length,
+        ptr(_gifPool), _gifPool.length,
+        ptr(delays), maxFrames || 500,
+        ptr(wView), ptr(hView), ptr(fcView),
+    );
+
+    if (result < 0) throw new Error("GIF decode failed: " + result);
+
+    const width = dims[0]!;
+    const height = dims[1]!;
+    const frameCount = dims[2]!;
+    const frameSize = width * height * 4;
+    let t1 = performance.now();
 
     for (let i = 0; i < frameCount; i++) {
-        let tDecode = performance.now();
-        const { data, info } = await sharp(buf, { page: i }).raw().ensureAlpha().toBuffer({ resolveWithObject: true });
-        totalDecode += performance.now() - tDecode;
-
-        const delayMs = (delays[i] ?? 10) * 10;
-
+        const offset = i * frameSize;
         frames.push({
-            data: new Uint8Array(data),
-            delayMs,
-            width: info.width,
-            height: info.height,
+            data: new Uint8Array(_gifPool.buffer, _gifPool.byteOffset + offset, frameSize),
+            delayMs: delays[i]!,
+            width,
+            height,
             left: 0,
             top: 0,
             disposal: 0,
@@ -317,16 +321,8 @@ export async function decodeGif(buf: Uint8Array, maxFrames?: number): Promise<GI
     }
 
     return {
-        width,
-        height,
-        frames,
-        loopCount,
-        stats: {
-            parseMs: tParse - t0,
-            idatMs: 0,
-            inflateMs: totalDecode,
-            defilterMs: 0,
-        },
+        width, height, frames, loopCount: 0,
+        stats: { parseMs: t1 - t0, idatMs: 0, inflateMs: 0, defilterMs: 0 },
     };
 }
 

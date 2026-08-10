@@ -5,6 +5,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define STBI_NO_STDIO
+#define STBI_NO_JPEG
+#define STBI_NO_PNG
+#define STBI_NO_BMP
+#define STBI_NO_PSD
+#define STBI_NO_TGA
+#define STBI_NO_HDR
+#define STBI_NO_PIC
+#define STBI_NO_PNM
+#define STBI_NO_LINEAR
+#define STBI_NO_FAILURE_STRINGS
+#define STBI_NO_SIMD
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 static int32_t abs_i32(int32_t x) { return x < 0 ? -x : x; }
 
 static uint8_t paeth_u8(uint8_t a, uint8_t b, uint8_t c) {
@@ -158,90 +173,37 @@ int32_t decode_jpeg_to_rgba(uint8_t* input, int32_t input_len,
     return 0;
 }
 
-/* ── GIF LZW ── */
-typedef struct { int32_t bits; int32_t num_bits; const uint8_t* data; int32_t len; int32_t pos; } lzw_reader;
+/* ── GIF decoder (stb_image) ── */
 
-static int32_t lzw_read_bits(lzw_reader* r, int32_t n) {
-    while (r->num_bits < n) {
-        if (r->pos >= r->len) return -1;
-        r->bits |= (int32_t)r->data[r->pos++] << r->num_bits;
-        r->num_bits += 8;
+int32_t decode_gif_to_rgba(uint8_t* input, int32_t input_len,
+                            uint8_t* rgba_pool, int32_t pool_capacity,
+                            int32_t* frame_delays, int32_t max_frames,
+                            int32_t* width_out, int32_t* height_out,
+                            int32_t* frame_count_out) {
+    int w, h, frames, comp;
+    int* delays;
+    uint8_t* data = stbi_load_gif_from_memory(input, input_len, &delays, &w, &h, &frames, &comp, 4);
+    if (!data) return -1;
+
+    *width_out = w;
+    *height_out = h;
+    int count = frames < max_frames ? frames : max_frames;
+    *frame_count_out = count;
+
+    int32_t frame_size = w * h * 4;
+    int32_t needed = frame_size * count;
+    if (needed > pool_capacity) {
+        stbi_image_free(data);
+        stbi_image_free(delays);
+        return -2;
     }
-    int32_t result = r->bits & ((1 << n) - 1);
-    r->bits >>= n; r->num_bits -= n;
-    return result;
-}
 
-int32_t decode_gif_frame(uint8_t* lzw_data, int32_t lzw_len,
-                          int32_t min_code_size,
-                          uint8_t* indices_out, int32_t pixel_count) {
-    lzw_reader r = {0, 0, lzw_data, lzw_len, 0};
-    int32_t clear_code = 1 << min_code_size, eoi_code = clear_code + 1;
-    int32_t next_code = eoi_code + 1, code_size = min_code_size + 1;
-    static int32_t prefix[4096];
-    static uint8_t suffix[4096];
-    static uint8_t decode_buf[4096];
-    int32_t out_idx = 0, prev_code = -1;
-
-    while (out_idx < pixel_count) {
-        int32_t code = lzw_read_bits(&r, code_size);
-        if (code < 0) break;
-        if (code == eoi_code) break;
-        if (code == clear_code) {
-            next_code = eoi_code + 1; code_size = min_code_size + 1; prev_code = -1;
-            continue;
-        }
-        if (prev_code < 0) {
-            if (out_idx >= pixel_count) break;
-            indices_out[out_idx++] = (uint8_t)code;
-            prev_code = code;
-            continue;
-        }
-
-        int32_t stack_idx = 0, curr = code;
-        if (curr == next_code) {
-            int32_t fc;
-            if (prev_code < clear_code) { fc = prev_code; }
-            else { int32_t c = prev_code; while (c >= clear_code) c = prefix[c]; fc = c; }
-            decode_buf[stack_idx++] = (uint8_t)fc;
-            curr = prev_code;
-        }
-        if (curr < clear_code) { decode_buf[stack_idx++] = (uint8_t)curr; }
-        else {
-            int32_t chain = 0;
-            while (curr >= clear_code && chain < 4096) {
-                decode_buf[stack_idx++] = suffix[curr];
-                curr = prefix[curr];
-                chain++;
-            }
-            decode_buf[stack_idx++] = (uint8_t)curr;
-        }
-        int32_t first_byte = decode_buf[stack_idx - 1];
-        for (int32_t i = stack_idx - 1; i >= 0 && out_idx < pixel_count; i--)
-            indices_out[out_idx++] = decode_buf[i];
-
-        if (next_code < 4096 && prev_code >= 0) {
-            prefix[next_code] = prev_code;
-            suffix[next_code] = (uint8_t)first_byte;
-            next_code++;
-            if (next_code > (1 << code_size) && code_size < 12) code_size++;
-        }
-        prev_code = code;
+    memcpy(rgba_pool, data, needed);
+    for (int i = 0; i < count; i++) {
+        frame_delays[i] = delays[i]; // stb already converts centiseconds → ms
     }
-    return out_idx;
-}
 
-/* ── GIF palette expander ── */
-void expand_palette_to_rgba(uint8_t* indices, int32_t pixel_count,
-                             uint8_t* palette, int32_t palette_size,
-                             uint8_t* rgba_out, int32_t transp_idx) {
-    for (int32_t i = 0; i < pixel_count; i++) {
-        int32_t d = i * 4, idx = indices[i];
-        if (transp_idx >= 0 && idx == transp_idx) {
-            rgba_out[d]=0; rgba_out[d+1]=0; rgba_out[d+2]=0; rgba_out[d+3]=0;
-        } else if (idx < palette_size) {
-            int32_t p = idx * 3;
-            rgba_out[d]=palette[p]; rgba_out[d+1]=palette[p+1]; rgba_out[d+2]=palette[p+2]; rgba_out[d+3]=255;
-        }
-    }
+    stbi_image_free(data);
+    stbi_image_free(delays);
+    return count;
 }
