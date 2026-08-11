@@ -15,6 +15,10 @@
 #include <time.h>
 #include <errno.h>
 
+#ifdef _WIN32
+#define G_OS_WIN32 1
+#endif
+
 #ifndef _WIN32
 #include <unistd.h>
 #include <fcntl.h>
@@ -54,7 +58,7 @@ typedef uintptr_t          guintptr;
 typedef intptr_t           gintptr;
 typedef uint8_t            guchar;
 typedef uint32_t           GQuark;
-typedef int                GPid;
+/* GPid defined later (platform-dependent) */
 
 typedef uint16_t           gushort;
 
@@ -151,7 +155,16 @@ static gpointer g_malloc_n(gsize n, gsize sz) { return malloc(n*sz); }
 static gpointer g_malloc0_n(gsize n, gsize sz) { return calloc(n, sz); }
 static void g_free(gpointer p) { free(p); }
 static gchar* g_strdup(const gchar *s) { return s ? strdup(s) : NULL; }
-static gchar* g_strndup(const gchar *s, gsize n) { return s ? strndup(s, n) : NULL; }
+static gchar* g_strndup(const gchar *s, gsize n) {
+    if (!s) return NULL;
+#ifdef _WIN32
+    gsize len = 0; while (len < n && s[len]) len++;
+    gchar *r = malloc(len + 1); if (!r) return NULL;
+    memcpy(r, s, len); r[len] = '\0'; return r;
+#else
+    return strndup(s, n);
+#endif
+}
 static gpointer g_memdup(gconstpointer m, guint sz) { if(!m) return NULL; void *p=malloc(sz); if(p) memcpy(p,m,sz); return p; }
 
 /* ── Atomic operations ── */
@@ -501,11 +514,43 @@ static inline void g_queue_free_full(GQueue *q, GDestroyNotify fn) {
     while(n){GQNode *nx=n->next; if(fn)fn(n->data); free(n); n=nx;} free(q);
 }
 
-/* ── Threading (minimal) ── */
+/* ── Threading (minimal, pthread on POSIX, Win32 API on Windows) ── */
+#ifdef _WIN32
+typedef CRITICAL_SECTION GMutex;
+typedef CONDITION_VARIABLE GCond;
+typedef HANDLE GThread;
+
+static inline void g_mutex_init(GMutex *m) { InitializeCriticalSection(m); }
+static inline void g_mutex_clear(GMutex *m) { DeleteCriticalSection(m); }
+static inline void g_mutex_lock(GMutex *m) { EnterCriticalSection(m); }
+static inline void g_mutex_unlock(GMutex *m) { LeaveCriticalSection(m); }
+static inline void g_cond_init(GCond *c) { InitializeConditionVariable(c); }
+static inline void g_cond_clear(GCond *c) { (void)c; }
+static inline void g_cond_signal(GCond *c) { WakeConditionVariable(c); }
+static inline void g_cond_broadcast(GCond *c) { WakeAllConditionVariable(c); }
+static inline void g_cond_wait(GCond *c, GMutex *m) { SleepConditionVariableCS(c, m, INFINITE); }
+typedef struct { gint64 tv_sec; gint64 tv_usec; } GTimeVal;
+static inline gboolean g_cond_wait_until(GCond *c, GMutex *m, gint64 end_time) {
+    gint64 now; struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    now = (gint64)ts.tv_sec*1000000 + ts.tv_nsec/1000;
+    if (now >= end_time) return FALSE;
+    DWORD ms = (DWORD)((end_time - now) / 1000);
+    if (ms == 0) ms = 1;
+    return SleepConditionVariableCS(c, m, ms) ? TRUE : FALSE;
+}
+static inline gpointer g_thread_new(const gchar *name, void*(*func)(gpointer), gpointer data) {
+    (void)name; HANDLE h = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)func, data, 0, NULL);
+    return (gpointer)h;
+}
+static inline void g_thread_join(gpointer thread) {
+    if(!thread) return; WaitForSingleObject((HANDLE)thread, INFINITE); CloseHandle((HANDLE)thread);
+}
+#define g_thread_yield() Sleep(0)
+#define g_thread_self() ((void*)(guintptr)GetCurrentThreadId())
+#else
 typedef pthread_mutex_t GMutex;
 typedef pthread_cond_t GCond;
 typedef pthread_t GThread;
-typedef struct { GMutex m; GCond c; gpointer data; } GThreadData;
 
 static inline void g_mutex_init(GMutex *m) { pthread_mutex_init(m, NULL); }
 static inline void g_mutex_clear(GMutex *m) { pthread_mutex_destroy(m); }
@@ -516,26 +561,25 @@ static inline void g_cond_clear(GCond *c) { pthread_cond_destroy(c); }
 static inline void g_cond_signal(GCond *c) { pthread_cond_signal(c); }
 static inline void g_cond_broadcast(GCond *c) { pthread_cond_broadcast(c); }
 static inline void g_cond_wait(GCond *c, GMutex *m) { pthread_cond_wait(c, m); }
-
 typedef struct { gint64 tv_sec; gint64 tv_usec; } GTimeVal;
 static inline gboolean g_cond_wait_until(GCond *c, GMutex *m, gint64 end_time) {
     struct timespec ts = { (time_t)(end_time/1000000), (long)((end_time%1000000)*1000) };
-    int r = pthread_cond_timedwait(c, m, &ts);
-    return r != ETIMEDOUT;
+    int r = pthread_cond_timedwait(c, m, &ts); return r != ETIMEDOUT;
 }
-
 static inline gpointer g_thread_new(const gchar *name, void*(*func)(gpointer), gpointer data) {
-    (void)name; pthread_t *t=malloc(sizeof(pthread_t));
-    pthread_create(t, NULL, func, data); return t;
+    (void)name; pthread_t *t=malloc(sizeof(pthread_t)); pthread_create(t, NULL, func, data); return t;
 }
 static inline void g_thread_join(gpointer thread) {
     if(!thread) return; pthread_join(*(pthread_t*)thread, NULL); free(thread);
 }
+#define g_thread_yield() sched_yield()
+#define g_thread_self() ((void*)(guintptr)pthread_self())
+#endif
 
 /* ── GError (forward declared for thread pool) ── */
 typedef struct { guint domain; gint code; gchar *message; } GError;
 
-/* Thread pool (simplified - single worker directly calls function) */
+/* Thread pool (simplified - single-threaded mode only) */
 typedef struct { GMutex m; GCond c; GQueue *q; gpointer *threads; gint n_threads; } GThreadPool;
 static inline GThreadPool* g_thread_pool_new(GFunc func, gpointer ud, gint max, gboolean excl, GError **err) {
     (void)func;(void)ud;(void)max;(void)excl;(void)err;
@@ -550,12 +594,6 @@ static inline void g_thread_pool_free(GThreadPool *p, gboolean imm, gboolean wai
     if(!p) return; (void)imm; (void)wait;
     g_queue_free_full(p->q, g_free); g_mutex_clear(&p->m); g_cond_clear(&p->c); free(p);
 }
-
-/* g_thread_yield */
-#define g_thread_yield() sched_yield()
-
-/* GThread */
-#define g_thread_self() ((void*)(guintptr)pthread_self())
 
 /* ── GOnce ── */
 typedef struct { volatile int status; gpointer retval; } GOnce;
@@ -615,8 +653,15 @@ static inline GQuark g_quark_from_string(const gchar *s) { (void)s; return 1; }
 
 /* ── Time ── */
 static inline gint64 g_get_monotonic_time(void) {
+#ifdef _WIN32
+    LARGE_INTEGER freq, cnt;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&cnt);
+    return (gint64)(cnt.QuadPart * 1000000 / freq.QuadPart);
+#else
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return (gint64)ts.tv_sec*1000000 + ts.tv_nsec/1000;
+#endif
 }
 static inline guint g_get_num_processors(void) { return 1; }
 
@@ -626,7 +671,11 @@ static inline const gchar* g_environ_getenv(gchar **envp, const gchar *name) {
     for(gint i=0; envp[i]; i++) { if(!strncmp(envp[i],name,nl) && envp[i][nl]=='=') return envp[i]+nl+1; }
     return NULL;
 }
+#ifdef _WIN32
+static inline gchar** g_get_environ(void) { return NULL; }
+#else
 static inline gchar** g_get_environ(void) { extern char **environ; return environ; }
+#endif
 
 /* ── g_once_impl ── */
 static inline gpointer g_once_impl(GOnce *once, void*(*func)(gpointer), gpointer arg) {
@@ -648,6 +697,9 @@ typedef void* (*GThreadFunc)(gpointer);
 
 /* ── Poll ── */
 static inline gint g_poll(GPollFD *fds, guint n, gint timeout) {
+#ifdef _WIN32
+    (void)fds;(void)n;(void)timeout; return 0;
+#else
     struct pollfd *p = malloc(sizeof(struct pollfd)*n);
     for(guint i=0; i<n; i++) { p[i].fd=fds[i].fd; p[i].events=0;
         if(fds[i].events&G_IO_IN) p[i].events|=POLLIN;
@@ -657,6 +709,7 @@ static inline gint g_poll(GPollFD *fds, guint n, gint timeout) {
         if(r>0&&p[i].revents&POLLIN) fds[i].revents|=G_IO_IN;
         if(r>0&&p[i].revents&POLLOUT) fds[i].revents|=G_IO_OUT; }
     free(p); return r;
+#endif
 }
 
 /* ── Unix ── */
@@ -665,7 +718,7 @@ static inline gint g_unix_open_pipe(gint *fds, gint flags, GError **err) {
 #ifndef _WIN32
     return pipe(fds);
 #else
-    return -1;
+    (void)fds; return -1;
 #endif
 }
 static inline gboolean g_unix_set_fd_nonblocking(gint fd, gboolean nb, GError **err) {
@@ -679,5 +732,19 @@ static inline gboolean g_unix_set_fd_nonblocking(gint fd, gboolean nb, GError **
 /* ── Event loop stubs ── */
 static inline guint g_idle_add(gboolean(*fn)(gpointer), gpointer d) { (void)fn;(void)d; return 0; }
 static inline gboolean g_source_remove(guint tag) { (void)tag; return TRUE; }
+
+/* ── Win32 helpers ── */
+#ifdef _WIN32
+static inline gchar* g_win32_error_message(guint32 err) {
+    (void)err; return g_strdup("Unknown error");
+}
+#endif
+
+/* ── GPid ── */
+#ifdef _WIN32
+typedef void* GPid;
+#else
+typedef pid_t GPid;
+#endif
 
 #endif /* GLIB_MINI_H */

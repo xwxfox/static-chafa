@@ -1,6 +1,5 @@
 // codec.c — unified image decode + chafa render library
 // Single FFI boundary. No external deps at runtime beyond system libraries.
-// Links: -ljpeg -lwebp -lwebpdemux -lchafa -lglib-2.0 -lz -lm
 //
 // Exports:
 //   codec_render_path / codec_render_buffer — static images → ANSI string + metrics
@@ -19,6 +18,13 @@
 #include <webp/decode.h>
 #include <webp/demux.h>
 #include <png.h>
+
+/* Symbol export for Windows DLL */
+#ifdef _WIN32
+  #define CODEC_EXPORT __declspec(dllexport)
+#else
+  #define CODEC_EXPORT __attribute__((visibility("default")))
+#endif
 
 #define STBI_NO_STDIO
 #define STBI_NO_JPEG
@@ -267,11 +273,11 @@ static void create_anim_handle(AnimType t, uint8_t* rgba, int frames, int w, int
     for (int i=0; i<16; i++) { if (!_handles[i]) { _handles[i]=calloc(1,sizeof(AnimHandle)); _handles[i]->type=t; _handles[i]->rgbabuf=rgba; _handles[i]->total_frames=frames; _handles[i]->frame_size=w*h*4; _handles[i]->w=w; _handles[i]->h=h; _handles[i]->idx=0; _handles[i]->webp_buf=buf; _handles[i]->webp_len=blen; return; } }
 }
 
-/* ── public API ── */
+ /* ── public API ── */
 
-char* codec_render_buffer(char* data, int32_t len, CodecConfig* cfg, CodecMetrics* out, int32_t* err);
+CODEC_EXPORT char* codec_render_buffer(char* data, int32_t len, CodecConfig* cfg, CodecMetrics* out, int32_t* err);
 
-char* codec_render_path(const char* path, CodecConfig* in_cfg, CodecMetrics* out, int32_t* err) {
+CODEC_EXPORT char* codec_render_path(const char* path, CodecConfig* in_cfg, CodecMetrics* out, int32_t* err) {
     *err = ERR_OK;
     if (!path) { *err = ERR_BAD_PARAMS; return strdup(err_string(ERR_BAD_PARAMS)); }
     FILE* f=fopen(path,"rb"); if(!f) { *err = ERR_FILE_OPEN; return strdup(err_string(ERR_FILE_OPEN)); }
@@ -286,7 +292,7 @@ char* codec_render_path(const char* path, CodecConfig* in_cfg, CodecMetrics* out
     return result;
 }
 
-char* codec_render_buffer(char* data, int32_t len, CodecConfig* cfg, CodecMetrics* out, int32_t* err) {
+CODEC_EXPORT char* codec_render_buffer(char* data, int32_t len, CodecConfig* cfg, CodecMetrics* out, int32_t* err) {
     *err = ERR_OK;
     memset(out, 0, sizeof(CodecMetrics));
     DecodeCtx dctx={0};
@@ -326,7 +332,7 @@ char* codec_render_buffer(char* data, int32_t len, CodecConfig* cfg, CodecMetric
     return ansi;
 }
 
-int32_t codec_anim_open_buffer(char* data, int32_t len, CodecConfig* cfg, CodecMetrics* out, int32_t* err) {
+CODEC_EXPORT int32_t codec_anim_open_buffer(char* data, int32_t len, CodecConfig* cfg, CodecMetrics* out, int32_t* err) {
     *err = ERR_OK;
     memset(out, 0, sizeof(CodecMetrics));
     if (!data || len <= 0) { *err = ERR_BAD_PARAMS; return -1; }
@@ -372,7 +378,7 @@ int32_t codec_anim_open_buffer(char* data, int32_t len, CodecConfig* cfg, CodecM
     return -1;
 }
 
-int32_t codec_anim_next(int32_t handle, CodecMetrics* out) {
+CODEC_EXPORT int32_t codec_anim_next(int32_t handle, CodecMetrics* out) {
     if (handle<0||handle>=16||!_handles[handle]) return -1;
     AnimHandle* h=_handles[handle];
     if (h->aborted) return -1;
@@ -399,7 +405,7 @@ int32_t codec_anim_next(int32_t handle, CodecMetrics* out) {
     return -1;
 }
 
-int32_t codec_anim_rewind(int32_t handle) {
+CODEC_EXPORT int32_t codec_anim_rewind(int32_t handle) {
     if (handle<0||handle>=16||!_handles[handle]) return -1;
     AnimHandle* h=_handles[handle];
     if (h->type==ANIM_GIF) { h->idx = 0; return 0; }
@@ -415,14 +421,14 @@ int32_t codec_anim_rewind(int32_t handle) {
     return -1;
 }
 
-uint8_t* codec_anim_frame_data(int32_t handle, int32_t frame_idx) {
+CODEC_EXPORT uint8_t* codec_anim_frame_data(int32_t handle, int32_t frame_idx) {
     if (handle<0||handle>=16||!_handles[handle]) return NULL;
     AnimHandle* h=_handles[handle];
     if (frame_idx<0||frame_idx>=h->idx) return NULL;
     return h->rgbabuf + frame_idx*h->frame_size;
 }
 
-char* codec_anim_render_frame(int32_t handle, int32_t frame_idx, CodecMetrics* out) {
+CODEC_EXPORT char* codec_anim_render_frame(int32_t handle, int32_t frame_idx, CodecMetrics* out) {
     if (handle<0||handle>=16||!_handles[handle]) return strdup("ERROR: invalid handle");
     AnimHandle* h=_handles[handle];
     uint8_t* data=codec_anim_frame_data(handle, frame_idx);
@@ -431,7 +437,7 @@ char* codec_anim_render_frame(int32_t handle, int32_t frame_idx, CodecMetrics* o
     return chafa_render_to(data, h->w, h->h, h->canvas);
 }
 
-void codec_anim_close(int32_t handle) {
+CODEC_EXPORT void codec_anim_close(int32_t handle) {
     if (handle<0||handle>=16||!_handles[handle]) return;
     AnimHandle* h=_handles[handle];
     if (h->type==ANIM_GIF) { stbi_image_free(h->rgbabuf); stbi_image_free(h->delays); }
@@ -441,9 +447,9 @@ void codec_anim_close(int32_t handle) {
     free(h); _handles[handle]=NULL;
 }
 
-void codec_anim_abort(int32_t handle) {
+CODEC_EXPORT void codec_anim_abort(int32_t handle) {
     if (handle<0||handle>=16||!_handles[handle]) return;
     _handles[handle]->aborted=1;
 }
 
-void codec_free_string(char* s) { if (s) free(s); }
+CODEC_EXPORT void codec_free_string(char* s) { if (s) free(s); }
