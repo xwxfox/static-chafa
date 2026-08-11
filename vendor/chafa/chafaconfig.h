@@ -1,4 +1,4 @@
-/* chafaconfig.h — generated config for chafa library */
+/* chafaconfig.h - generated config for chafa library */
 #ifndef __CHAFACONFIG_H__
 #define __CHAFACONFIG_H__
 

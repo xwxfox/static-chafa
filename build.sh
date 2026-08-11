@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build.sh — Build embedded-chafa native library
+# build.sh - Build embedded-chafa native library
 # Usage:
 #   ./build.sh dev                        → codec.so for Bun FFI (dev/test)
 #   ./build.sh                            → static_chafa.node for NAPI (npm)
@@ -57,7 +57,7 @@ case "${TARGET}" in
     *) echo "Unknown: ${TARGET}"; exit 1 ;;
 esac
 
-# POPCNT: available on all x86_64 CPUs since ~2008 — safe default for x64 targets
+# POPCNT: available on all x86_64 CPUs since ~2008 - safe default for x64 targets
 case "${TARGET}" in
     native)  ENABLE_POPCNT=$(grep -qc popcnt /proc/cpuinfo 2>/dev/null && echo true || echo false) ;;
     x86_64-linux|x86_64-windows) ENABLE_POPCNT=true ;;

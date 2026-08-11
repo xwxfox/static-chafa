@@ -76,7 +76,7 @@ async function runAnim(name: string, buf: Uint8Array, speed: number): Promise<An
     const AH = Math.min(TH - 4, TH - 2), AW = TW;
     console.log(CLEAR + HIDE);
     console.log(`${"═".repeat(TW)}`);
-    console.log(fit(`  ${name} — native speed, 10s — term ${AW}x${AH}`, TW));
+    console.log(fit(`  ${name} - native speed, 10s - term ${AW}x${AH}`, TW));
     console.log(`${"═".repeat(TW)}`);
 
     const player = openAnim(buf, { termW: AW, termH: AH, speed });
@@ -124,7 +124,7 @@ async function runMax(name: string, buf: Uint8Array): Promise<MaxResult> {
     const AH = Math.min(TH - 4, TH - 2), AW = TW;
     console.log(CLEAR + HIDE);
     console.log(`${"═".repeat(TW)}`);
-    console.log(fit(`  ${name} — max speed (10s)`, TW));
+    console.log(fit(`  ${name} - max speed (10s)`, TW));
     console.log(`${"═".repeat(TW)}`);
 
     const player = openAnim(buf, { termW: AW, termH: AH, speed: 1e9 });

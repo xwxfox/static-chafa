@@ -1,4 +1,4 @@
-// types.ts — shared types for both Bun FFI and NAPI entry points
+// types.ts - shared types for both Bun FFI and NAPI entry points
 
 /** 0=PNG, 1=JPEG, 2=BMP, 3=GIF, 4=WebP */
 export type ChafaFormat = number;

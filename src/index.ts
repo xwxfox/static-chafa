@@ -1,4 +1,4 @@
-// static-chafa — ESM entry (also re-exported as CJS via tsdown)
+// static-chafa - ESM entry (also re-exported as CJS via tsdown)
 // Copyright (c) 2023-2024 c0d3d3v. MIT.
 
 import { createRequire } from "node:module";

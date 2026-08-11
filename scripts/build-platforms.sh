@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-platforms.sh — Build .node NAPI addons for ALL platforms + dist artifacts
+# build-platforms.sh - Build .node NAPI addons for ALL platforms + dist artifacts
 # Output: platforms/*/static_chafa.node + dist/ (via tsdown)
 # After build, syncs version from main package.json to all platform packages.
 set -euo pipefail

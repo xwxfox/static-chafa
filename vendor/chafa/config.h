@@ -1,4 +1,4 @@
-/* config.h — Minimal config for embedded chafa build */
+/* config.h - Minimal config for embedded chafa build */
 #ifndef CHAFA_CONFIG_H
 #define CHAFA_CONFIG_H
 

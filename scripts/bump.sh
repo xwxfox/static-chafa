@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bump.sh — Bump semver across main package + all platform packages + optionalDeps
+# bump.sh - Bump semver across main package + all platform packages + optionalDeps
 # Usage: ./scripts/bump.sh <major|minor|patch|1.2.3>
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"

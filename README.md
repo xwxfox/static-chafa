@@ -4,11 +4,11 @@
 
 ## What this is
 
-A best-effort static embedding of [chafa](https://github.com/hpjansson/chafa) (`v1.19.0`) — a terminal graphics renderer — into a single portable C library with zero runtime dependencies beyond libc. Every other dependency (glib, libpng, libjpeg, libwebp, zlib) is either entirely replaced in a vendor layer or cross-compiled into the binary at build time. The result is a native addon that works identically across Linux x64, Linux arm64, macOS arm64, and Windows x64.
+A best-effort static embedding of [chafa](https://github.com/hpjansson/chafa) (`v1.19.0`) - a terminal graphics renderer - into a single portable C library with zero runtime dependencies beyond libc. Every other dependency (glib, libpng, libjpeg, libwebp, zlib) is either entirely replaced in a vendor layer or cross-compiled into the binary at build time. The result is a native addon that works identically across Linux x64, Linux arm64, macOS arm64, and Windows x64.
 
 ## Chafa surface area
 
-**Supported:** The full TRUECOLOR + SYMBOLS rendering pipeline — 24-bit ANSI truecolor output using Unicode half-block characters (`▀`, `▄`, `▌`, etc.). This covers `chafa_canvas_config_new`, `chafa_canvas_draw_all_pixels` (CHAFA_PIXEL_RGBA8_UNASSOCIATED → CHAFA_PIXEL_MODE_SYMBOLS), and `chafa_canvas_build_ansi`. All 39 chafa source files are compiled verbatim with no patches.
+**Supported:** The full TRUECOLOR + SYMBOLS rendering pipeline - 24-bit ANSI truecolor output using Unicode half-block characters (`▀`, `▄`, `▌`, etc.). This covers `chafa_canvas_config_new`, `chafa_canvas_draw_all_pixels` (CHAFA_PIXEL_RGBA8_UNASSOCIATED → CHAFA_PIXEL_MODE_SYMBOLS), and `chafa_canvas_build_ansi`. All 39 chafa source files are compiled verbatim with no patches.
 
 **Not supported:** Indexed-color modes (256-color, 16-color), Sixel, iTerm2, and Kitty protocols. These are compiled in for symbol resolution but never activated by our configuration. Dithering and preprocessing are disabled by default (configurable).
 
@@ -92,7 +92,7 @@ animClose(gif.handle);
 
 **Exports:** `renderBuffer`, `renderPath`, `animOpenBuffer`, `animNext`, `animRenderFrame`, `animRewind`, `animClose`, `animAbort`
 
-**Types:** `RenderConfig` (all optional — `termW`, `termH`, `workFactor`, `ditherMode`, `canvasMode`, `preprocessing`, `bgColor`, `speed`, `maxFrames`), `RenderResult` (`{ ansi, metrics }`), `RenderMetrics` (parsing/rendering timings + image dimensions)
+**Types:** `RenderConfig` (all optional - `termW`, `termH`, `workFactor`, `ditherMode`, `canvasMode`, `preprocessing`, `bgColor`, `speed`, `maxFrames`), `RenderResult` (`{ ansi, metrics }`), `RenderMetrics` (parsing/rendering timings + image dimensions)
 
 The main `static-chafa` package contains only JS/TS (the `dist/` directory produced by tsdown). Platform-specific `.node` binaries live in separate packages (`@static-chafa/linux-x64`, `@static-chafa/darwin-arm64`, etc.) that npm selects automatically via `os`/`cpu` constraints in `optionalDependencies`.
 

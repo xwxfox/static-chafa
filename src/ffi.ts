@@ -1,4 +1,4 @@
-// ffi.ts — Bun FFI bindings for codec.so (dev/test only)
+// ffi.ts - Bun FFI bindings for codec.so (dev/test only)
 import { dlopen, FFIType, ptr, CString } from "bun:ffi";
 import type { CodecMetrics, CodecConfig, RenderResult, AnimFrame } from "./types.ts";
 export type { CodecMetrics, CodecConfig, RenderResult, AnimFrame };
@@ -113,8 +113,8 @@ export class AnimPlayer {
         if (!ptrData) return null;
         // We need to know the frame size. The metrics from renderFrame tell us dimensions.
         // Use the stored metrics from last render or open.
-        // Actually, we stored w/h during open — need to expose them.
-        return null; // placeholder — dimensions unknown without storing them
+        // Actually, we stored w/h during open - need to expose them.
+        return null; // placeholder - dimensions unknown without storing them
     }
 
     close() { s.codec_anim_close(this.handle); }

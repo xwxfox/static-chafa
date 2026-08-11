@@ -1,4 +1,4 @@
-/* glib_mini.h — Complete GLib replacement for embedded chafa */
+/* glib_mini.h - Complete GLib replacement for embedded chafa */
 #ifndef GLIB_MINI_H
 #define GLIB_MINI_H
 

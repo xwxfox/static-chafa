@@ -1,1 +1,1 @@
-{"name":"@static-chafa/linux-x64","version":"1.0.0","publishConfig":{"access":"public"},"os":["linux"],"cpu":["x64"],"main":"static_chafa.node","files":["static_chafa.node"]}
+{"name":"@static-chafa/linux-x64","version":"1.0.1","publishConfig":{"access":"public"},"os":["linux"],"cpu":["x64"],"main":"static_chafa.node","files":["static_chafa.node"]}
