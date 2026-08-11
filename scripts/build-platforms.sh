@@ -51,8 +51,5 @@ while IFS= read -r -d '' file; do
 done
 
 echo ""; echo "All platforms built. Publish with:"
-echo "  npm publish"
-echo "  npm publish --workspace=platforms/linux-x64"
-echo "  npm publish --workspace=platforms/linux-arm64"
-echo "  npm publish --workspace=platforms/darwin-arm64"
-echo "  npm publish --workspace=platforms/win32-x64"
+echo "  npm publish      # main package (static-chafa)"
+echo "  npm publish -ws  # all 4 platform packages"

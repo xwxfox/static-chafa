@@ -4,7 +4,13 @@
   "description": "Zero-dependency terminal image rendering — static & animated images to ANSI art",
   "license": "MIT",
   "type": "module",
-  "private": true,
+  "private": false,
+  "workspaces": [
+    "platforms/linux-x64",
+    "platforms/linux-arm64",
+    "platforms/darwin-arm64",
+    "platforms/win32-x64"
+  ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.cts",
