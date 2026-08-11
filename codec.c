@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <chafa.h>
+#include "chafa.h"
 #include <zlib.h>
 #include <jpeglib.h>
 #include <webp/decode.h>
