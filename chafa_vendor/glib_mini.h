@@ -615,7 +615,7 @@ static inline void g_once_init_leave(volatile void *loc, gsize result) {
 #define g_assert_not_reached() do{fprintf(stderr,"ASSERT_NOT_REACHED %s:%d\n",__FILE__,__LINE__);abort();}while(0)
 #define g_assert_true(expr) g_assert(expr)
 static inline void g_return_if_fail_warning(const gchar *l, const gchar *f, const gchar *e) {
-    fprintf(stderr, "RETURN_IF_FAIL(%s) at %s:%s\n", e, f, l);
+    (void)l; (void)f; (void)e;
 }
 #define g_return_if_fail(expr) do{if(!(expr)){g_return_if_fail_warning(G_STRFUNC,__FILE__,#expr);return;}}while(0)
 #define g_return_val_if_fail(expr,v) do{if(!(expr)){g_return_if_fail_warning(G_STRFUNC,__FILE__,#expr);return(v);}}while(0)

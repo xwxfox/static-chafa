@@ -1,0 +1,1 @@
+{"name":"@static-chafa/linux-arm64","version":"1.0.0","os":["linux"],"cpu":["arm64"],"main":"static_chafa.node","files":["static_chafa.node"]}

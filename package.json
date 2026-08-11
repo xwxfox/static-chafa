@@ -5,7 +5,8 @@
   "private": true,
   "devDependencies": {
     "@types/bun": "latest",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "tsdown": "^0.22.14"
   },
   "peerDependencies": {
     "typescript": "^5"
