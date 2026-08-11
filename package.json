@@ -1,14 +1,38 @@
 {
-  "name": "chasel-ts-multirt",
-  "module": "index.ts",
+  "name": "static-chafa",
+  "version": "1.0.0",
+  "description": "Zero-dependency terminal image rendering — static & animated images to ANSI art",
+  "license": "MIT",
   "type": "module",
   "private": true,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.cts",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/index.d.mts", "default": "./dist/index.mjs" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "build:dev": "./build.sh dev",
+    "build:napi": "./build.sh napi",
+    "build:node": "./build.sh napi",
+    "build:platforms": "./scripts/build-platforms.sh",
+    "playground": "bun run playground/index.ts"
+  },
+  "optionalDependencies": {
+    "@static-chafa/linux-x64": "1.0.0",
+    "@static-chafa/linux-arm64": "1.0.0",
+    "@static-chafa/darwin-arm64": "1.0.0",
+    "@static-chafa/win32-x64": "1.0.0"
+  },
+  "files": ["dist/"],
   "devDependencies": {
     "@types/bun": "latest",
-    "sharp": "^0.35.3",
     "tsdown": "^0.22.14"
   },
-  "peerDependencies": {
-    "typescript": "^5"
-  }
+  "peerDependencies": { "typescript": "^5" },
+  "keywords": ["chafa", "ansi", "terminal", "image", "gif", "webp"]
 }

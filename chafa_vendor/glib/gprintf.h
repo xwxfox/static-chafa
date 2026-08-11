@@ -1,1 +1,0 @@
-/* glib/gprintf.h stub */

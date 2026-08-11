@@ -1,1 +1,0 @@
-/* glib/gstdio.h stub */
