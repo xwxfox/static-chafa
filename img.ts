@@ -1,6 +1,6 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import fs from "node:fs"
-import { decodePng, decodeJpeg, decodeGif } from "./decode-png.ts"
+import { decodePng, decodeJpeg, decodeGif, decodeWebp, decodeBmp } from "./decode-png.ts"
 
 const W = 80, H = 35;
 const runs = 10;
@@ -8,6 +8,8 @@ const runs = 10;
 const pngBuf = new Uint8Array(fs.readFileSync("fox.png"));
 const jpgBuf = new Uint8Array(fs.readFileSync("fox.jpg"));
 const gifBuf = new Uint8Array(fs.readFileSync("fox.gif"));
+const bmpBuf = new Uint8Array(fs.readFileSync("fox.bmp"));
+const webpBuf = new Uint8Array(fs.readFileSync("fox.webp"));
 
 const cs = dlopen("libchafa.so.0", {
     chafa_canvas_config_new: { args: [], returns: FFIType.ptr },
@@ -68,6 +70,10 @@ const gifFrame = gifData.frames[0]!;
 console.log(renderImageToTerminal(gifFrame.data, gifFrame.width, gifFrame.height, W, H));
 console.log("=== GIF ↑\n");
 
+const webpImg = decodeWebp(webpBuf);
+console.log(renderImageToTerminal(new Uint8Array(webpImg.data), webpImg.width, webpImg.height, W, H));
+console.log("=== WebP ↑\n");
+
 // ── Benchmark ──
 console.log(`=== Bench (${runs}x avg)   →  terminal ${W}x${H}  ===\n`);
 
@@ -96,6 +102,8 @@ function benchFormat(label: string, fn: () => any) {
 
 benchFormat("PNG ", () => decodePng(pngBuf));
 benchFormat("JPEG", () => decodeJpeg(jpgBuf));
+benchFormat("BMP ", () => decodeBmp(bmpBuf));
+benchFormat("WebP", () => decodeWebp(webpBuf));
 benchFormat("GIF ", () => {
     const g = decodeGif(gifBuf);
     const f = g.frames[0]!;

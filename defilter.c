@@ -4,11 +4,12 @@
 #include <jpeglib.h>
 #include <stdlib.h>
 #include <string.h>
+#include <webp/decode.h>
+#include <webp/demux.h>
 
 #define STBI_NO_STDIO
 #define STBI_NO_JPEG
 #define STBI_NO_PNG
-#define STBI_NO_BMP
 #define STBI_NO_PSD
 #define STBI_NO_TGA
 #define STBI_NO_HDR
@@ -200,10 +201,166 @@ int32_t decode_gif_to_rgba(uint8_t* input, int32_t input_len,
 
     memcpy(rgba_pool, data, needed);
     for (int i = 0; i < count; i++) {
-        frame_delays[i] = delays[i]; // stb already converts centiseconds → ms
+        frame_delays[i] = delays[i];
     }
 
     stbi_image_free(data);
     stbi_image_free(delays);
     return count;
+}
+
+/* ── GIF info only (fast, no decompress) ── */
+int32_t gif_get_info(uint8_t* input, int32_t input_len,
+                     int32_t* width_out, int32_t* height_out,
+                     int32_t* frame_count_out,
+                     int32_t* delays_out, int32_t max_delays) {
+    int w, h, frames, comp;
+    int* delays;
+    uint8_t* data = stbi_load_gif_from_memory(input, input_len, &delays, &w, &h, &frames, &comp, 4);
+    if (!data) return -1;
+
+    *width_out = w;
+    *height_out = h;
+    *frame_count_out = frames;
+    int count = frames < max_delays ? frames : max_delays;
+    for (int i = 0; i < count; i++) delays_out[i] = delays[i];
+
+    stbi_image_free(data);
+    stbi_image_free(delays);
+    return frames;
+}
+
+/* ── WebP decoder ── */
+int32_t decode_webp_to_rgba(uint8_t* input, int32_t input_len,
+                             uint8_t* rgba_out, int32_t capacity,
+                             int32_t* width_out, int32_t* height_out) {
+    int w, h;
+    if (!WebPGetInfo(input, input_len, &w, &h)) return -1;
+    *width_out = w; *height_out = h;
+    int32_t needed = w * h * 4;
+    if (needed > capacity) return -2;
+    uint8_t* result = WebPDecodeRGBAInto(input, input_len, rgba_out, needed, w * 4);
+    return (result == rgba_out) ? 0 : -1;
+}
+
+int32_t decode_animated_webp_to_rgba(uint8_t* input, int32_t input_len,
+                                      uint8_t* rgba_pool, int32_t pool_capacity,
+                                      int32_t* frame_delays, int32_t max_frames,
+                                      int32_t* width_out, int32_t* height_out,
+                                      int32_t* frame_count_out) {
+    WebPData webp_data = {input, (size_t)input_len};
+    WebPAnimDecoderOptions dec_opts;
+    WebPAnimDecoderOptionsInit(&dec_opts);
+    dec_opts.color_mode = MODE_RGBA;
+    WebPAnimDecoder* dec = WebPAnimDecoderNew(&webp_data, &dec_opts);
+    if (!dec) return -1;
+
+    WebPAnimInfo anim_info;
+    WebPAnimDecoderGetInfo(dec, &anim_info);
+    int32_t w = anim_info.canvas_width, h = anim_info.canvas_height;
+    *width_out = w; *height_out = h;
+
+    int32_t frame_size = w * h * 4;
+    int32_t count = 0, pool_pos = 0;
+
+    while (WebPAnimDecoderHasMoreFrames(dec) && count < max_frames) {
+        uint8_t* buf;
+        int timestamp;
+        if (pool_pos + frame_size > pool_capacity) break;
+        if (!WebPAnimDecoderGetNext(dec, &buf, &timestamp)) break;
+        memcpy(rgba_pool + pool_pos, buf, frame_size);
+        frame_delays[count] = timestamp;
+        pool_pos += frame_size;
+        count++;
+    }
+
+    *frame_count_out = count;
+    WebPAnimDecoderDelete(dec);
+    return count;
+}
+
+/* ── Streaming animated WebP ── */
+#define MAX_STREAMS 8
+typedef struct { WebPAnimDecoder* dec; uint8_t* pool; int32_t cap; int32_t pos; int32_t w; int32_t h; int32_t fs; int32_t active; } webp_stream;
+static webp_stream _streams[MAX_STREAMS];
+
+int32_t webp_anim_open(uint8_t* input, int32_t input_len, uint8_t* rgba_pool, int32_t pool_capacity,
+                        int32_t* width_out, int32_t* height_out, int32_t* delay_out) {
+    for (int k = 0; k < MAX_STREAMS; k++) {
+        if (!_streams[k].active) {
+            WebPData wpd = {input, (size_t)input_len};
+            WebPAnimDecoderOptions opts;
+            WebPAnimDecoderOptionsInit(&opts);
+            opts.color_mode = MODE_RGBA;
+            WebPAnimDecoder* dec = WebPAnimDecoderNew(&wpd, &opts);
+            if (!dec) return -1;
+            WebPAnimInfo info;
+            WebPAnimDecoderGetInfo(dec, &info);
+            _streams[k].dec = dec;
+            _streams[k].pool = rgba_pool;
+            _streams[k].cap = pool_capacity;
+            _streams[k].pos = 0;
+            _streams[k].w = info.canvas_width;
+            _streams[k].h = info.canvas_height;
+            _streams[k].fs = info.canvas_width * info.canvas_height * 4;
+            _streams[k].active = 1;
+            *width_out = info.canvas_width;
+            *height_out = info.canvas_height;
+            // decode first frame
+            uint8_t* buf; int ts;
+            if (WebPAnimDecoderGetNext(dec, &buf, &ts)) {
+                memcpy(rgba_pool, buf, _streams[k].fs);
+                *delay_out = ts;
+                _streams[k].pos = _streams[k].fs;
+                return k;
+            }
+            _streams[k].active = 0;
+            WebPAnimDecoderDelete(dec);
+            return -1;
+        }
+    }
+    return -1;
+}
+
+int32_t webp_anim_next(int32_t handle, int32_t count, int32_t* delays_out, int32_t* out_count) {
+    if (handle < 0 || handle >= MAX_STREAMS || !_streams[handle].active) return -1;
+    webp_stream* s = &_streams[handle];
+    int32_t decCount = 0;
+    while (decCount < count && WebPAnimDecoderHasMoreFrames(s->dec)) {
+        if (s->pos + s->fs > s->cap) break;
+        uint8_t* buf; int ts;
+        if (!WebPAnimDecoderGetNext(s->dec, &buf, &ts)) break;
+        memcpy(s->pool + s->pos, buf, s->fs);
+        delays_out[decCount] = ts;
+        s->pos += s->fs;
+        decCount++;
+    }
+    *out_count = decCount;
+    return decCount > 0 ? 0 : -1;
+}
+
+int32_t webp_anim_count(int32_t handle) {
+    if (handle < 0 || handle >= MAX_STREAMS || !_streams[handle].active) return -1;
+    return _streams[handle].pos / _streams[handle].fs;
+}
+
+void webp_anim_close(int32_t handle) {
+    if (handle < 0 || handle >= MAX_STREAMS || !_streams[handle].active) return;
+    WebPAnimDecoderDelete(_streams[handle].dec);
+    _streams[handle].active = 0;
+}
+
+/* ── BMP decoder ── */
+int32_t decode_bmp_to_rgba(uint8_t* input, int32_t input_len,
+                            uint8_t* rgba_out, int32_t capacity,
+                            int32_t* width_out, int32_t* height_out) {
+    int w, h, comp;
+    uint8_t* data = stbi_load_from_memory(input, input_len, &w, &h, &comp, 4);
+    if (!data) return -1;
+    *width_out = w; *height_out = h;
+    int32_t needed = w * h * 4;
+    if (needed > capacity) { stbi_image_free(data); return -2; }
+    memcpy(rgba_out, data, needed);
+    stbi_image_free(data);
+    return 0;
 }
