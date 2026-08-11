@@ -10,8 +10,14 @@
   "types": "./dist/index.d.cts",
   "exports": {
     ".": {
-      "import": { "types": "./dist/index.d.mts", "default": "./dist/index.mjs" },
-      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "scripts": {
@@ -20,6 +26,7 @@
     "build:napi": "./build.sh napi",
     "build:node": "./build.sh napi",
     "build:platforms": "./scripts/build-platforms.sh",
+    "bump": "./scripts/bump.sh",
     "playground": "bun run playground/index.ts"
   },
   "optionalDependencies": {
@@ -28,11 +35,22 @@
     "@static-chafa/darwin-arm64": "1.0.0",
     "@static-chafa/win32-x64": "1.0.0"
   },
-  "files": ["dist/"],
+  "files": [
+    "dist/"
+  ],
   "devDependencies": {
     "@types/bun": "latest",
     "tsdown": "^0.22.14"
   },
-  "peerDependencies": { "typescript": "^5" },
-  "keywords": ["chafa", "ansi", "terminal", "image", "gif", "webp"]
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "keywords": [
+    "chafa",
+    "ansi",
+    "terminal",
+    "image",
+    "gif",
+    "webp"
+  ]
 }

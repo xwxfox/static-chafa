@@ -57,6 +57,13 @@ case "${TARGET}" in
     *) echo "Unknown: ${TARGET}"; exit 1 ;;
 esac
 
+# POPCNT: available on all x86_64 CPUs since ~2008 — safe default for x64 targets
+case "${TARGET}" in
+    native)  ENABLE_POPCNT=$(grep -qc popcnt /proc/cpuinfo 2>/dev/null && echo true || echo false) ;;
+    x86_64-linux|x86_64-windows) ENABLE_POPCNT=true ;;
+    *) ENABLE_POPCNT=false ;;
+esac
+
 DEPS_DIR="${SRC_DIR}/deps/${TARGET}"
 DEPS_BUILD="/tmp/chafa_deps_build/${TARGET}"
 OUTDIR="${SRC_DIR}/out/${TARGET}"
@@ -74,6 +81,13 @@ INCLUDES="-I${VENDOR} -I${CHAFA_ORIG} -I${CHAFA_ORIG}/internal -I${CHAFA_ORIG}/i
 if [ "$MODE" = "napi" ]; then
     INCLUDES="${INCLUDES} -I${SRC_DIR}/src -I${SRC_DIR}/vendor/napi"
     CFLAGS="${CFLAGS} -DNAPI_VERSION=9 -DNODE_GYP_MODULE_NAME=static_chafa"
+fi
+
+if ${ENABLE_POPCNT}; then
+    CFLAGS="${CFLAGS} -DHAVE_POPCNT64_INTRINSICS"
+    echo "POPCNT: enabled"
+else
+    echo "POPCNT: disabled"
 fi
 
 # ── Deps (cross-compile only) ──
@@ -177,8 +191,16 @@ OBJ_FILES="${OUTDIR}/codec.o ${OBJ_FILES}"
 ${ZIG_CC} -c ${CFLAGS} -DCHAFA_COMPILATION ${INCLUDES} "${VENDOR}/chafa_quarks.c" -o "${OUTDIR}/quarks.o"
 OBJ_FILES="${OUTDIR}/quarks.o ${OBJ_FILES}"
 
+# POPCNT (compiled with -mpopcnt; only for x64 targets)
+if ${ENABLE_POPCNT}; then
+    ${ZIG_CC} -c ${CFLAGS} -DCHAFA_COMPILATION -mpopcnt ${INCLUDES} \
+        "${CHAFA_ORIG}/internal/chafa-popcnt.c" -o "${OUTDIR}/chafa-popcnt.o"
+    OBJ_FILES="${OUTDIR}/chafa-popcnt.o ${OBJ_FILES}"
+fi
+
 # NAPI addon (only for napi mode)
 LINK_FLAGS="-shared"
+LINK_EXTRA="${LINK_EXTRA:-}"
 if [ "$MODE" = "napi" ]; then
     echo "Compiling addon.c (NAPI)..."
     ${ZIG_CC} -c ${CFLAGS} ${INCLUDES} "${SRC_DIR}/src/addon.c" -o "${OUTDIR}/addon.o"
@@ -203,7 +225,7 @@ else
 fi
 
 echo "Linking → ${OUT_FILE}..."
-${ZIG_CC} ${LINK_FLAGS} ${OBJ_FILES} ${IMG_LIBS} -o "${OUT_FILE}"
+${ZIG_CC} ${LINK_FLAGS} ${LINK_EXTRA} ${OBJ_FILES} ${IMG_LIBS} -o "${OUT_FILE}"
 
 echo ""; echo "=== Done: ${OUT_FILE} ($(ls -lh "${OUT_FILE}" | awk '{print $5}')) ==="
 

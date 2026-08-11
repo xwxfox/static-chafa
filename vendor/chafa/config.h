@@ -17,15 +17,13 @@
 
 #define WORDS_BIGENDIAN 0
 
-/* Disable SIMD for simplicity */
+/* Disable SIMD (enabled per-target from build.sh when appropriate) */
 #undef HAVE_MMX_INTRINSICS
 #undef HAVE_SSE41_INTRINSICS
-#undef HAVE_POPCNT_INTRINSICS
-#undef HAVE_POPCNT64_INTRINSICS
-#undef HAVE_POPCNT32_INTRINSICS
 #undef HAVE_AVX2_INTRINSICS
 #undef HAVE_NEON_INTRINSICS
 #undef HAVE_ARM_NEON_H
+/* POPCNT: controlled by build.sh -DHAVE_POPCNT64_INTRINSICS */
 
 /* Threading */
 #define HAVE_PTHREAD 1
