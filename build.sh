@@ -248,19 +248,32 @@ else
     OUT_FILE="${SRC_DIR}/codec.so"
 fi
 
-# For Windows .node builds, generate import lib from napi.def
-# to avoid weak-undefined IAT entries that crash on Windows Insider builds
+# For Windows .node builds, link napi_* against an import lib (LIBRARY node.exe)
+# instead of -Wl,--allow-shlib-undefined, which produces weak-undefined IAT
+# entries that crash at load on Windows (access violation on both Node and Bun).
 if [ "$MODE" = "napi" ] && [ "${PLAT_PKG}" = "win32-x64" ]; then
-    echo "Generating napi import lib for Windows..."
+    echo "Setting up napi import lib for Windows..."
     NAPI_LIB_DIR="${OUTDIR}/napi_lib"
     mkdir -p "${NAPI_LIB_DIR}"
-    if [ -f "${SRC_DIR}/napi.def" ]; then
-        dlltool -d "${SRC_DIR}/napi.def" -l "${NAPI_LIB_DIR}/libnapi.a" 2>/dev/null || true
-        if [ -f "${NAPI_LIB_DIR}/libnapi.a" ]; then
-            LINK_FLAGS="${LINK_FLAGS/-Wl,--allow-shlib-undefined/}"
-            IMG_LIBS="${IMG_LIBS} -L${NAPI_LIB_DIR} -lnapi"
+    NAPI_LIB="${NAPI_LIB_DIR}/libnapi.a"
+    VENDOR_NAPI_LIB="${SRC_DIR}/vendor/napi/libnapi.a"
+    if command -v dlltool >/dev/null 2>&1 && [ -f "${SRC_DIR}/napi.def" ]; then
+        echo "  generating libnapi.a from napi.def (dlltool)"
+        dlltool -m i386:x86-64 -d "${SRC_DIR}/napi.def" -l "${NAPI_LIB}"
+        if [ ! -s "${NAPI_LIB}" ]; then
+            echo "WARN: dlltool produced no output, using checked-in libnapi.a" >&2
+            cp "${VENDOR_NAPI_LIB}" "${NAPI_LIB}"
         fi
+    elif [ -f "${VENDOR_NAPI_LIB}" ]; then
+        echo "  dlltool not found, using checked-in libnapi.a"
+        cp "${VENDOR_NAPI_LIB}" "${NAPI_LIB}"
+    else
+        echo "ERROR: dlltool not found and no checked-in ${VENDOR_NAPI_LIB}" >&2
+        echo "Install mingw-w64 binutils (dlltool) or restore vendor/napi/libnapi.a" >&2
+        exit 1
     fi
+    LINK_FLAGS="${LINK_FLAGS/-Wl,--allow-shlib-undefined/}"
+    IMG_LIBS="${IMG_LIBS} -L${NAPI_LIB_DIR} -lnapi"
 fi
 
 echo "Linking -> ${OUT_FILE}..."
