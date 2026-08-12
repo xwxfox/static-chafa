@@ -51,6 +51,7 @@
   ],
   "devDependencies": {
     "@types/bun": "latest",
+    "moxygen": "^2.1.12",
     "tsdown": "^0.22.14",
     "typedoc": "^0.28.20",
     "typedoc-plugin-markdown": "^4.12.0"

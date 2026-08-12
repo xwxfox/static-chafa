@@ -24,3 +24,6 @@ deps_src
 .DS_Store
 
 chafa-git
+
+# generated doxygen intermediate files
+docs/c_api_xml/

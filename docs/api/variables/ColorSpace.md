@@ -7,7 +7,7 @@ const ColorSpace: {
 };
 ```
 
-Defined in: [types.ts:88](https://github.com/xwxfox/chafa-ts-multirt/blob/18c481ec51b788385334241066516efe490b9d18/src/types.ts#L88)
+Defined in: [types.ts:88](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L88)
 
 Chafa color spaces for distance calculations.
 
@@ -18,5 +18,5 @@ Chafa color spaces for distance calculations.
 
 | Name | Type | Default value | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="property-din99d"></a> `DIN99D` | `1` | `1` | [types.ts:90](https://github.com/xwxfox/chafa-ts-multirt/blob/18c481ec51b788385334241066516efe490b9d18/src/types.ts#L90) |
-| <a id="property-rgb"></a> `RGB` | `0` | `0` | [types.ts:89](https://github.com/xwxfox/chafa-ts-multirt/blob/18c481ec51b788385334241066516efe490b9d18/src/types.ts#L89) |
+| <a id="property-din99d"></a> `DIN99D` | `1` | `1` | [types.ts:90](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L90) |
+| <a id="property-rgb"></a> `RGB` | `0` | `0` | [types.ts:89](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L89) |

@@ -4,7 +4,7 @@
 type ChafaFormat = number;
 ```
 
-Defined in: [types.ts:15](https://github.com/xwxfox/chafa-ts-multirt/blob/18c481ec51b788385334241066516efe490b9d18/src/types.ts#L15)
+Defined in: [types.ts:15](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L15)
 
 Image format detected by the decoder.
 

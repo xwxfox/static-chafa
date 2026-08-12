@@ -17,25 +17,55 @@
  * Usage: bun run docs
  */
 
-import { $ } from "bun";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 
 const DOCS_DIR = "docs";
 const API_DIR = join(DOCS_DIR, "api");
 
-// Clean
-rmSync(DOCS_DIR, { recursive: true, force: true });
+// Clean output dirs but preserve Doxyfile.c
+if (existsSync(API_DIR)) rmSync(API_DIR, { recursive: true, force: true });
+if (existsSync(join(DOCS_DIR, "c_api_xml"))) rmSync(join(DOCS_DIR, "c_api_xml"), { recursive: true, force: true });
+for (const f of ["index.md", "guide.md"]) {
+    const p = join(DOCS_DIR, f);
+    if (existsSync(p)) rmSync(p);
+}
 mkdirSync(API_DIR, { recursive: true });
+mkdirSync(DOCS_DIR, { recursive: true });
 
 // Step 1: Generate TypeScript API docs via typedoc
 console.log("-> Generating TypeScript API docs...");
-await $`bun x typedoc`;
+const tr = Bun.spawnSync(["bunx", "typedoc"], { stdio: ["ignore", "ignore", "pipe"] });
+if (tr.exitCode !== 0) throw new Error("typedoc failed");
 
-// Step 2: Generate C API reference
+// Step 2: Generate C API reference via doxygen → moxygen
 console.log("-> Generating C API reference...");
-const cRef = buildCRef();
-writeFileSync(join(DOCS_DIR, "api", "c.md"), cRef);
+const dr = Bun.spawnSync(["doxygen", "docs/Doxyfile.c"], { stdio: ["ignore", "ignore", "pipe"] });
+if (dr.exitCode !== 0) throw new Error("doxygen failed");
+const mr = Bun.spawnSync(["bunx", "moxygen", "--anchors", "--quiet", "--language", "cpp", "docs/c_api_xml", "-o", join(DOCS_DIR, "api", "c.md")], { stdio: ["ignore", "ignore", "pipe"] });
+if (mr.exitCode !== 0) throw new Error("moxygen failed");
+
+// Post-process: remove internal types not part of the public API
+let cContent = readFileSync(join(DOCS_DIR, "api", "c.md"), "utf8");
+// Remove internal type rows from tables (markdown backtick-formatted links)
+for (const name of ["jpg_err", "jpg_src", "AnimHandle"]) {
+    cContent = cContent.replace(new RegExp(`^\\|.*${name}.*\\|.*\\n`, "gm"), "");
+}
+// Remove internal type body sections (### heading blocks)
+for (const name of ["jpg_err", "jpg_src", "AnimHandle", "AnimType"]) {
+    cContent = cContent.replace(
+        new RegExp(`\\n### \\x60?${name}\\x60?[\\s\\S]*?(?=\\n## |\\n### |\\n---|\\n\\z)`, "g"),
+        ""
+    );
+}
+cContent = cContent.replace(/\n{3,}/g, "\n\n");
+// Remove empty Enumerations section
+cContent = cContent.replace(/## Enumerations\n+{#[^}]*}\n{2,}/g, "");
+writeFileSync(join(DOCS_DIR, "api", "c.md"), cContent);
+
+// Clean up doxygen XML intermediate files
+const xmlDir = join(DOCS_DIR, "c_api_xml");
+if (existsSync(xmlDir)) rmSync(xmlDir, { recursive: true, force: true });
 
 // Step 3: Write guide
 const guide = buildGuide();
