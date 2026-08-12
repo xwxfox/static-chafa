@@ -6,7 +6,12 @@ export default defineConfig({
     format: ["cjs", "esm"],
     dts: true,
     sourcemap: false,
-    external: [/^@static-chafa\//],
+    outputOptions: {
+        exports: "named",
+    },
+    deps: {
+        neverBundle: [/^@static-chafa\//],
+    },
     platform: "node",
     target: "es2022",
 });

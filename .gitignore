@@ -12,7 +12,7 @@ deps/
 *.tgz
 
 # deps source tarballs (auto-fetched, not source)
-deps_src/
+deps_src
 
 # caches
 .eslintcache
@@ -22,3 +22,5 @@ deps_src/
 # ide / os
 .idea
 .DS_Store
+
+chafa-git

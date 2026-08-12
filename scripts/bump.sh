@@ -19,7 +19,7 @@ bump3() {
 }
 
 NEW=$(bump3 "$NEXT")
-echo "Bumping 1.0.0 → ${NEW} (${NEXT})" | sed "s/1.0.0/$(node -e "process.stdout.write(require('${DIR}/package.json').version)")/"
+echo "Bumping 1.0.0 -> ${NEW} (${NEXT})" | sed "s/1.0.0/$(node -e "process.stdout.write(require('${DIR}/package.json').version)")/"
 
 # Update main package.json
 node -e "

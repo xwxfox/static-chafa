@@ -1,145 +1,209 @@
 # static-chafa
 
-**Zero-dependency terminal image rendering.** Decodes PNG, JPEG, BMP, GIF, and WebP (static + animated) in native C, renders to ANSI half-block characters, and returns ANSI strings to JavaScript/TypeScript. Available as a Node.js NAPI native addon (`static-chafa`) and as a Bun FFI shared library (`codec.so`).
-
-## What this is
-
-A best-effort static embedding of [chafa](https://github.com/hpjansson/chafa) (`v1.19.0`) - a terminal graphics renderer - into a single portable C library with zero runtime dependencies beyond libc. Every other dependency (glib, libpng, libjpeg, libwebp, zlib) is either entirely replaced in a vendor layer or cross-compiled into the binary at build time. The result is a native addon that works identically across Linux x64, Linux arm64, macOS arm64, and Windows x64.
-
-## Chafa surface area
-
-**Supported:** The full TRUECOLOR + SYMBOLS rendering pipeline - 24-bit ANSI truecolor output using Unicode half-block characters (`▀`, `▄`, `▌`, etc.). This covers `chafa_canvas_config_new`, `chafa_canvas_draw_all_pixels` (CHAFA_PIXEL_RGBA8_UNASSOCIATED → CHAFA_PIXEL_MODE_SYMBOLS), and `chafa_canvas_build_ansi`. All 39 chafa source files are compiled verbatim with no patches.
-
-**Not supported:** Indexed-color modes (256-color, 16-color), Sixel, iTerm2, and Kitty protocols. These are compiled in for symbol resolution but never activated by our configuration. Dithering and preprocessing are disabled by default (configurable).
-
-## How we eliminated glib
-
-Chafa depends heavily on GLib. We provide a complete replacement in `vendor/chafa/glib_mini.h` (~750 lines) that implements every GLib type, macro, and function chafa references:
-
-- **Data structures:** GString, GHashTable, GArray, GQueue (full implementations)
-- **Threading:** GMutex, GCond, GThread, GThreadPool (pthread on POSIX, Win32 API on Windows)
-- **Memory:** g_malloc, g_free, g_slice, g_new, etc.
-- **Unicode:** g_unichar_isprint/iszerowidth/iswide, g_utf8_get_char, g_unichar_to_utf8
-- **Logging/assertions:** g_assert, g_return_if_fail, g_warning, g_error
-- **Platform abstractions:** g_poll, g_unix_open_pipe, g_unix_set_fd_nonblocking
-
-An include-path trick places `vendor/chafa/` first on the compiler's search path, so chafa's `#include <glib.h>` resolves to our replacement rather than the system's real GLib.
-
-## Cross-platform build system
-
-A single `build.sh` script handles everything using `zig cc` for cross-compilation:
-
-```
-./build.sh dev           → codec.so for Bun FFI (native only)
-./build.sh napi          → static_chafa.node for Node.js (native only)
-./build.sh <target> napi → cross-compile .node for target
-```
-
-Targets: `native`, `x86_64-linux`, `aarch64-linux`, `x86_64-windows`, `aarch64-macos`.
-
-For cross-compilation, the script auto-fetches and builds static libraries for libpng, libjpeg (IJG), libwebp, and zlib from source tarballs using `zig cc`. These are cached in `deps/<target>/`.
-
-**SIMD:** POPCNT is enabled on all x64 targets. The `chafa-popcnt.c` file is compiled with `-mpopcnt` and the inline dispatchers in chafa's symbol matching code use the hardware popcount instruction automatically.
-
-## C API (imported via FFI/NAPI)
-
-All functions use C calling convention, exported via `CODEC_EXPORT`:
-
-| Function | Signature | Purpose |
-|---|---|---|
-| `codec_render_buffer` | `(uint8_t* data, int32_t len, Config*, Metrics*, int32_t* err) → char*` | Render image buffer to ANSI string |
-| `codec_render_path` | `(const char* path, Config*, Metrics*, int32_t* err) → char*` | Render file at path to ANSI string |
-| `codec_anim_open_buffer` | `(uint8_t* data, int32_t len, Config*, Metrics*, int32_t* err) → int32_t` | Open animation, returns handle |
-| `codec_anim_next` | `(int32_t handle, Metrics*) → int32_t` | Get next frame index (returns < 0 when done) |
-| `codec_anim_render_frame` | `(int32_t handle, int32_t frameIdx, Metrics*) → char*` | Render specific frame |
-| `codec_anim_rewind` | `(int32_t handle) → int32_t` | Reset to frame 0 |
-| `codec_anim_close` | `(int32_t handle)` | Free animation resources |
-| `codec_anim_abort` | `(int32_t handle)` | Immediate abort |
-| `codec_free_string` | `(char* s)` | Free ANSI string returned by render functions |
-
-**Config struct** (36 bytes):
-```
-term_w, term_h (int32)  |  work_factor (float)  |  dither_mode, canvas_mode,
-preprocessing, bg_color (int32)  |  max_frames (int32)  |  speed (float)
-```
-
-**Metrics struct** (36 bytes):
-```
-parse_ms, inflate_ms, defilter_ms, render_ms (float32)
-img_w, img_h, frame_count, frame_delay_ms, format (int32)
-```
-
-## Node.js API
+**Zero-dependency terminal image rendering.** Decodes PNG, JPEG, BMP, GIF, and WebP (static + animated) in native C, renders to ANSI terminal art using the [chafa](https://hpjansson.org/chafa/) engine, and returns strings to JavaScript. Ships as a Node.js NAPI native addon with platform-specific binaries.
 
 ```ts
-npm install static-chafa
+import Chafa, { CanvasMode, DitherMode } from "static-chafa";
+
+const chafa = new Chafa({ termW: 80, termH: 24 });
+const { ansi, metrics } = chafa.render(imageBuffer);
+process.stdout.write(ansi);
+// metrics: { parseMs, drawMs, buildMs, totalMs, imgW/H, canvasW/H, ... }
+chafa.destroy();
 ```
 
-```js
-import { renderBuffer, animOpenBuffer, animNext, animRenderFrame, animClose } from "static-chafa";
-import { readFileSync } from "fs";
+## Features
 
-const { ansi, metrics } = renderBuffer(readFileSync("cat.png"), { termW: 80, termH: 24 });
+- **5 image formats** - PNG, JPEG, BMP, GIF, WebP (all decoded in C via libpng/libjpeg/libwebp/stb_image)
+- **Animation** - GIF and WebP frame-by-frame playback with `openAnimation()` / `next()` / `renderFrame()`
+- **Full chafa config** - 22 config fields covering canvas mode, pixel mode, dithering, color space, symbol selectors, and more
+- **Rich metrics** - per-operation timing (parse/draw/build/total), image dimensions, canvas dimensions, RGBA buffer size
+- **Decode once, render many** - pre-decode to raw RGBA with `decode()`, render with multiple configs via `renderRgba()`
+- **Cell matrix** - access the raw character grid as JSON with `renderMatrix()`
+- **Using keyword** - `Symbol.dispose` on Chafa, ChafaImage, and ChafaAnimation
+- **Zero runtime deps** - chafa is compiled verbatim with a complete GLib replacement layer (`vendor/chafa/glib_mini.h`)
+- **Cross-platform** - linux-x64, linux-arm64, darwin-arm64, win32-x64 via `zig cc`
+
+## Quick Start
+
+```bash
+bun install static-chafa
+```
+
+```ts
+import Chafa from "static-chafa";
+
+// Create an instance with your terminal dimensions
+const chafa = new Chafa({ termW: 80, termH: 24 });
+
+// Render any supported image
+const { ansi, metrics } = chafa.render(fs.readFileSync("cat.png"));
 process.stdout.write(ansi);
 
-const gif = animOpenBuffer(readFileSync("cat.gif"), { termW: 80, termH: 35 });
-let frame;
-while ((frame = animNext(gif.handle))) {
-    process.stdout.write(animRenderFrame(gif.handle, frame.frameIndex).ansi);
-}
-animClose(gif.handle);
+console.log(metrics);
+// {
+//   parseMs: 5.4,    // image decode time
+//   drawMs: 2.6,     // chafa symbol matching
+//   buildMs: 0.1,    // ANSI string generation
+//   totalMs: 8.1,    // sum
+//   imgW: 641, imgH: 641,
+//   canvasW: 80, canvasH: 24,
+//   canvasPw: 640, canvasPh: 192,
+//   format: 0, canvasMode: 0, pixelMode: 0
+// }
+
+chafa.destroy();
 ```
 
-**Exports:** `renderBuffer`, `renderPath`, `animOpenBuffer`, `animNext`, `animRenderFrame`, `animRewind`, `animClose`, `animAbort`
+## API
 
-**Types:** `RenderConfig` (all optional - `termW`, `termH`, `workFactor`, `ditherMode`, `canvasMode`, `preprocessing`, `bgColor`, `speed`, `maxFrames`), `RenderResult` (`{ ansi, metrics }`), `RenderMetrics` (parsing/rendering timings + image dimensions)
+### `new Chafa(config?: Partial<ChafaConfig>)`
 
-The main `static-chafa` package contains only JS/TS (the `dist/` directory produced by tsdown). Platform-specific `.node` binaries live in separate packages (`@static-chafa/linux-x64`, `@static-chafa/darwin-arm64`, etc.) that npm selects automatically via `os`/`cpu` constraints in `optionalDependencies`.
-
-## Bun FFI (development)
-
-```sh
-bun run build:dev        # produces codec.so
-bun run playground        # interactive benchmark
-```
+Creates a rendering instance. Each instance holds its own configuration and caches a single chafa canvas.
 
 ```ts
-import { renderBuffer, openAnim } from "./src/ffi.ts";
+import Chafa, { CanvasMode, DitherMode } from "static-chafa";
+
+const chafa = new Chafa({
+    termW: 80,          // width in cells
+    termH: 24,          // height in cells
+    canvasMode: CanvasMode.TRUECOLOR,
+    ditherMode: DitherMode.NONE,
+    // ...see ChafaConfig for all options
+});
 ```
 
-## Project structure
+### Methods
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `render(buffer)` | `{ ansi, metrics }` | Decode + render to ANSI string |
+| `renderPath(path)` | `{ ansi, metrics }` | Read file + render to ANSI string |
+| `decode(buffer)` | `ChafaImage` | Decode to raw RGBA pixels |
+| `renderRgba(rgba, w, h)` | `{ ansi, metrics }` | Render pre-decoded RGBA |
+| `renderMatrix(buffer)` | `{ matrix, metrics }` | Decode + render to JSON cell grid |
+| `renderMatrixRgba(rgba, w, h)` | `{ matrix, metrics }` | Render pre-decoded RGBA to cell grid |
+| `openAnimation(buffer)` | `ChafaAnimation` | Open animated GIF/WebP |
+| `updateConfig(partial)` | `void` | Update config (invalidates canvas) |
+| `destroy()` | `void` | Free all native resources |
+
+### `ChafaImage`
+
+Holds decoded RGBA pixels. Created by `chafa.decode(buffer)`.
+
+```ts
+const img = chafa.decode(buffer);
+img.width;      // 641
+img.height;     // 641
+img.rgba;       // Uint8Array of RGBA pixels
+img.stride;     // row stride in bytes (width * 4)
+img.format;     // 0=PNG, 1=JPEG, 2=BMP, 3=GIF, 4=WebP
+img.metrics;    // CodecMetrics from decode
+
+// Re-render with different configs
+chafa.updateConfig({ canvasMode: CanvasMode.INDEXED_256 });
+chafa.renderRgba(img.rgba, img.width, img.height);
+```
+
+### `ChafaAnimation`
+
+Controls frame-by-frame playback of animated GIF/WebP.
+
+```ts
+const anim = chafa.openAnimation(gifBuffer);
+anim.frameCount;     // 58
+anim.width;          // 640
+anim.height;         // 640
+anim.imageFormat;    // 3 (GIF)
+
+while (true) {
+    const frame = anim.next();
+    if (!frame) break;  // playback ended
+    const { ansi, metrics } = anim.renderFrame(frame.frameIndex);
+    process.stdout.write(`\x1b[H${ansi}`);
+    await sleep(metrics.frameDelayMs);
+}
+anim.close();
+```
+
+### Using `using` (TypeScript 5.2+)
+
+```ts
+{
+    using chafa = new Chafa({ termW: 80, termH: 24 });
+    const { ansi } = chafa.render(buf);
+    // chafa.destroy() called automatically here
+}
+```
+
+### `ChafaConfig`
+
+See [typedoc docs](docs/api/interfaces/ChafaConfig.md) for full config reference, or the [chafa man page](https://hpjansson.org/chafa/man/).
+
+Key config fields:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `termW`, `termH` | number | 80, 24 | Cell grid dimensions |
+| `cellW`, `cellH` | number | 8, 8 | Font aspect ratio |
+| `workFactor` | number | 0.0 | Quality/speed (0=fast, 1=best) |
+| `canvasMode` | number | 0 | `CanvasMode.TRUECOLOR` / `INDEXED_256` / ... |
+| `pixelMode` | number | 0 | `PixelMode.SYMBOLS` / `SIXELS` / `KITTY` / `ITERM2` |
+| `ditherMode` | number | 0 | `DitherMode.NONE` / `ORDERED` / `DIFFUSION` / `NOISE` |
+| `symbols` | string | "" | Chafa CLI selector string (e.g. `"block+border+space-wide"`) |
+| `fillSymbols` | string | "" | Fill symbol map selector string |
+
+## CodecMetrics
+
+Returned with every render/decode operation:
+
+| Field | Description |
+|-------|-------------|
+| `parseMs` | Image format detection + codec decode time |
+| `drawMs` | `chafa_canvas_draw_all_pixels` - scaling, symbol matching |
+| `buildMs` | `chafa_canvas_print` - ANSI string generation |
+| `totalMs` | `parseMs + drawMs + buildMs` |
+| `imgW`, `imgH` | Source image pixels |
+| `canvasW`, `canvasH` | Cell grid dimensions |
+| `canvasPw`, `canvasPh` | Internal pixel canvas size |
+| `rgbaBytes` | Decoded RGBA buffer size |
+| `format` | 0=PNG, 1=JPEG, 2=BMP, 3=GIF, 4=WebP |
+| `canvasMode`, `pixelMode` | Active rendering mode enums |
+| `haveAlpha` | Source had alpha channel |
+
+## Architecture
+
+Chafa's source tree (39 `.c` files) is compiled verbatim into the native addon. A vendor layer at `vendor/chafa/` replaces GLib entirely with a custom implementation (~750 lines of `glib_mini.h`), provides a fake autotools config, and supplies stub headers. The include path `-I vendor/chafa` is placed first so chafa's `#include <glib.h>` resolves to our replacement.
 
 ```
-src/          codec.c  ffi.ts  addon.c  index.ts  types.ts  stb_image.h
-vendor/       chafa/ (glib shim, config, quarks)  napi/ (NAPI headers)
-playground/   benchmark/player/validation scripts + test media
-platforms/    linux-x64/  linux-arm64/  darwin-arm64/  win32-x64/ (package.json + .node)
-dist/         index.cjs  index.mjs  index.d.cts  index.d.mts (tsdown output)
-deps_src/     source tarballs for image codecs (auto-fetched)
-deps/         built static libs per target (auto-generated)
-build.sh      single build script for all targets
-scripts/      build-platforms.sh  bump.sh
+chafa source           vendor layer          our code
+─────────────          ────────────          ────────
+internal/*.c           vendor/chafa/         src/codec.c
+chafa-*.c   ─includes-> config.h   ─includes-> src/addon.c
+smolscale/*.c           glib_mini.h           src/index.ts
+                        chafa_quarks.c
 ```
 
-## Development commands
+Image decode is handled by our own code in `codec.c` using libpng, libjpeg (IJG), libwebp, and stb_image (GIF). Chafa receives decoded RGBA pixels via `chafa_canvas_draw_all_pixels()`.
 
-| Command | Does |
-|---|---|
-| `bun run build:dev` | Build `codec.so` for Bun FFI |
-| `bun run build:napi` | Build native `.node` addon |
-| `bun run build:platforms` | Cross-compile all `.node` files + tsdown + sync versions |
-| `bun run build` | tsdown (JS dist only) |
-| `bun run bump` | Bump version (patch/minor/major/x.y.z) across all packages |
-| `bun run playground` | Interactive 4-section benchmark |
+## Development
 
-## Publish flow
-
-```sh
-bun run bump patch
-bun run build:platforms
-npm publish                                # main package (static-chafa)
-cd platforms/linux-x64   && npm publish
-cd platforms/linux-arm64 && npm publish
-cd platforms/darwin-arm64 && npm publish
-cd platforms/win32-x64   && npm publish
+```bash
+bun run build:dev     # Build codec.so for Bun FFI
+bun run build:napi    # Build .node addon
+bun run test          # Run 38 tests
+bun run bench         # Run comprehensive benchmark
+bun run docs          # Generate API docs
+bun run playground    # Interactive test suite
 ```
+
+### Maintenance
+
+When chafa updates, only the vendor layer needs expansion (see [VENDOR.md](VENDOR.md)):
+- New `.c` files -> add to `CHAFA_FILES` in `build.sh`
+- New GLib includes -> create stub headers
+- New GLib functions -> implement in `glib_mini.h`
+
+## License
+
+MIT

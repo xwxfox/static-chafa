@@ -1,0 +1,30 @@
+{
+    "$schema": "https://typedoc.org/schema.json",
+    "entryPoints": ["src/index.ts"],
+    "plugin": ["typedoc-plugin-markdown"],
+    "out": "docs/api",
+    "readme": "none",
+    "includeVersion": true,
+    "excludeExternals": true,
+    "excludePrivate": true,
+    "exclude": [
+        "playground/**",
+        "tests/**",
+        "scripts/**",
+        "platforms/**",
+        "deps/**",
+        "deps_src/**",
+        "node_modules/**",
+        "vitest.config.ts"
+    ],
+    "skipErrorChecking": true,
+    "hidePageHeader": true,
+    "hideBreadcrumbs": true,
+    "useCodeBlocks": true,
+    "expandObjects": true,
+    "parametersFormat": "table",
+    "propertiesFormat": "table",
+    "enumMembersFormat": "table",
+    "typeDeclarationFormat": "table",
+    "indexFormat": "table"
+}

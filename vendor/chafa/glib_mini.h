@@ -279,6 +279,14 @@ static inline void g_string_printf(GString *gs, const gchar *fmt, ...) {
     va_start(ap, fmt); vsnprintf(gs->str, gs->allocated_len, fmt, ap); va_end(ap);
     gs->len = strlen(gs->str);
 }
+static inline void g_string_append_printf(GString *gs, const gchar *fmt, ...) {
+    if(!gs) return; va_list ap; va_start(ap, fmt);
+    gint n = vsnprintf(NULL, 0, fmt, ap); va_end(ap);
+    if(n<=0) return;
+    _gstr_grow(gs, (gsize)n);
+    va_start(ap, fmt); vsnprintf(gs->str + gs->len, (gsize)n + 1, fmt, ap); va_end(ap);
+    gs->len += (gsize)n;
+}
 
 /* ── strdup_printf ── */
 static inline gchar* g_strdup_printf(const gchar *fmt, ...) {

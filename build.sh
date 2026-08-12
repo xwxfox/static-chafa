@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # build.sh - Build embedded-chafa native library
 # Usage:
-#   ./build.sh dev                        → codec.so for Bun FFI (dev/test)
-#   ./build.sh                            → static_chafa.node for NAPI (npm)
-#   ./build.sh x86_64-linux [napi]        → cross-compile FFI lib or NAPI .node
-#   ./build.sh aarch64-linux [napi]       → cross-compile
-#   ./build.sh x86_64-windows [napi]      → cross-compile
-#   ./build.sh aarch64-macos [napi]       → cross-compile
+#   ./build.sh dev                        -> codec.so for Bun FFI (dev/test)
+#   ./build.sh                            -> static_chafa.node for NAPI (npm)
+#   ./build.sh x86_64-linux [napi]        -> cross-compile FFI lib or NAPI .node
+#   ./build.sh aarch64-linux [napi]       -> cross-compile
+#   ./build.sh x86_64-windows [napi]      -> cross-compile
+#   ./build.sh aarch64-macos [napi]       -> cross-compile
 set -euo pipefail
 
 MODE="ffi"
@@ -259,7 +259,7 @@ if [ "$MODE" = "napi" ] && [ "${PLAT_PKG}" = "win32-x64" ]; then
     fi
 fi
 
-echo "Linking → ${OUT_FILE}..."
+echo "Linking -> ${OUT_FILE}..."
 ${ZIG_CC} ${LINK_FLAGS} ${LINK_EXTRA} ${OBJ_FILES} ${IMG_LIBS} -o "${OUT_FILE}"
 
 echo ""; echo "=== Done: ${OUT_FILE} ($(ls -lh "${OUT_FILE}" | awk '{print $5}')) ==="

@@ -1,6 +1,6 @@
 {
   "name": "static-chafa",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "Zero-dependency terminal image rendering - static & animated images to ANSI art",
   "license": "MIT",
   "type": "module",
@@ -33,20 +33,27 @@
     "build:node": "./build.sh napi",
     "build:platforms": "./scripts/build-platforms.sh",
     "bump": "./scripts/bump.sh",
+    "docs": "bun run scripts/docs.ts",
+    "docs:api": "typedoc",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "bench": "bun run scripts/bench.ts",
     "playground": "bun run playground/index.ts"
   },
   "optionalDependencies": {
-    "@static-chafa/linux-x64": "1.0.1",
-    "@static-chafa/linux-arm64": "1.0.1",
-    "@static-chafa/darwin-arm64": "1.0.1",
-    "@static-chafa/win32-x64": "1.0.1"
+    "@static-chafa/linux-x64": "1.0.3",
+    "@static-chafa/linux-arm64": "1.0.3",
+    "@static-chafa/darwin-arm64": "1.0.3",
+    "@static-chafa/win32-x64": "1.0.3"
   },
   "files": [
     "dist/"
   ],
   "devDependencies": {
     "@types/bun": "latest",
-    "tsdown": "^0.22.14"
+    "tsdown": "^0.22.14",
+    "typedoc": "^0.28.20",
+    "typedoc-plugin-markdown": "^4.12.0"
   },
   "peerDependencies": {
     "typescript": "^5"

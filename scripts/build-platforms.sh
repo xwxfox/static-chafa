@@ -40,7 +40,7 @@ node -e "
     }
     require('fs').writeFileSync('${DIR}/package.json', JSON.stringify(p, null, 2) + '\n');
 "
-echo "  optionalDependencies → ${VERSION}"
+echo "  optionalDependencies -> ${VERSION}"
 
 echo ""; echo "=== native module sizes ==="
 find "${DIR}/platforms" -type f -name '*.node' -print0 |

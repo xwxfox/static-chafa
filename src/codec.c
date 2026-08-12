@@ -1,21 +1,65 @@
+/**
+ * @file codec.c
+ * @brief Unified image decode + chafa render library.
+ *
+ * Zero-dependency native rendering engine. Links directly against chafa's
+ * source tree (compiled verbatim) plus libpng, libjpeg, libwebp, and zlib.
+ *
+ * ## Architecture
+ *
+ * A `CodecCtx` holds per-instance state: a cached chafa canvas and up to 16
+ * animation handles. All public functions take a `CodecCtx *` as their first
+ * parameter. Create with `codec_ctx_new()`, destroy with `codec_ctx_free()`.
+ *
+ * ## Memory safety
+ *
+ * Every allocation has a documented ownership path:
+ * - Strings returned by `codec_render*` / `codec_render_matrix*` must be
+ *   freed by the caller via `codec_free()`.
+ * - RGBA buffers returned by `codec_decode_buffer()` must be freed by the
+ *   caller via `codec_free()`.
+ * - RGBA buffers written by `codec_decode_into()` are caller-owned.
+ * - The `CodecCtx` owns all canvas and animation resources; freeing the
+ *   context closes any open animations.
+ *
+ * ## Struct layout
+ *
+ * `CodecConfig` and `CodecMetrics` are defined identically here and in
+ * `addon.c`. Their byte layout must match exactly because they are passed
+ * across the FFI boundary as raw pointers. The TypeScript-side `ffi.ts`
+ * reads/writes these structs via `Int32Array`/`Float32Array` views.
+ *
+ * @see https://hpjansson.org/chafa/ Chafa documentation
+ */
+
 // codec.c - unified image decode + chafa render library
 // Single FFI boundary. No external deps at runtime beyond system libraries.
 //
+// Memory safety: every allocation has a documented ownership path.
+// The CodecCtx owns canvas and animation handles. Caller owns
+// returned strings (must free with codec_free). decode_buffer
+// returns caller-owned RGBA memory (free with codec_free).
+//
 // Exports:
-//   codec_render_path / codec_render_buffer - static images → ANSI string + metrics
-//   codec_anim_open_path / codec_anim_open_buffer - start animated playback
-//   codec_anim_next - get next frame as ANSI string
-//   codec_anim_close / codec_anim_abort - cleanup / cancel
+//   codec_ctx_new / codec_ctx_free / codec_ctx_configure
+//   codec_decode_buffer - raw decode to RGBA
+//   codec_render - decode + chafa -> ANSI
+//   codec_render_rgba - pre-decoded RGBA -> ANSI
+//   codec_render_matrix / codec_render_matrix_rgba - decode -> JSON cell grid
+//   codec_anim_open / codec_anim_next / codec_anim_render_frame
+//   codec_anim_rewind / codec_anim_close / codec_anim_abort
+//   codec_free - free any buffer returned by the above
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <setjmp.h>
 #include <time.h>
 #include "chafa.h"
+#include "internal/chafa-canvas-internal.h"
 #include <zlib.h>
-#undef HAVE_BOOLEAN
-#define HAVE_BOOLEAN
+
 #include <jpeglib.h>
 #include <webp/decode.h>
 #include <webp/demux.h>
@@ -43,96 +87,110 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-/* ── error codes ── */
+/**
+ * @name Error codes
+ * Returned via the `err` out-parameter on most public API functions.
+ * Negative values indicate failure; `ERR_OK` (0) indicates success.
+ * @{
+ */
 #define ERR_OK 0
-#define ERR_UNKNOWN_FMT -1
-#define ERR_FILE_OPEN -2
-#define ERR_FILE_READ -3
-#define ERR_FILE_EMPTY -4
-#define ERR_MALLOC -5
-#define ERR_UNSUPPORTED -6
-#define ERR_CORRUPT_DATA -7
-#define ERR_DIMENSIONS -8
-#define ERR_DECODE_FAIL -9
-#define ERR_INFLATE_FAIL -10
-#define ERR_POOL_FULL -11
-#define ERR_BAD_PARAMS -12
+#define ERR_UNKNOWN_FMT -1   /**< Unrecognized image format */
+#define ERR_FILE_OPEN -2     /**< Could not open file (render_path) */
+#define ERR_FILE_READ -3     /**< Could not read file */
+#define ERR_FILE_EMPTY -4    /**< File or buffer is empty */
+#define ERR_MALLOC -5        /**< Memory allocation failed */
+#define ERR_UNSUPPORTED -6   /**< Unsupported format or features */
+#define ERR_CORRUPT_DATA -7  /**< Corrupt or truncated data */
+#define ERR_DIMENSIONS -8    /**< Invalid image dimensions (<1 or >65536) */
+#define ERR_DECODE_FAIL -9   /**< Codec-specific decode failure */
+#define ERR_INFLATE_FAIL -10 /**< Decompression (zlib) failure */
+#define ERR_POOL_FULL -11    /**< Output buffer too small */
+#define ERR_BAD_PARAMS -12   /**< Invalid parameters (null, zero length, etc.) */
+/** @} */
 
 static const char *err_string(int code)
 {
     switch (code)
     {
-    case ERR_UNKNOWN_FMT:
-        return "Unknown image format";
-    case ERR_FILE_OPEN:
-        return "Cannot open file";
-    case ERR_FILE_READ:
-        return "Cannot read file";
-    case ERR_FILE_EMPTY:
-        return "File is empty";
-    case ERR_MALLOC:
-        return "Memory allocation failed";
-    case ERR_UNSUPPORTED:
-        return "Unsupported image format or features";
-    case ERR_CORRUPT_DATA:
-        return "Corrupt or truncated image data";
-    case ERR_DIMENSIONS:
-        return "Invalid image dimensions";
-    case ERR_DECODE_FAIL:
-        return "Image decode failed";
-    case ERR_INFLATE_FAIL:
-        return "Decompression failed";
-    case ERR_POOL_FULL:
-        return "Output buffer too small";
-    case ERR_BAD_PARAMS:
-        return "Invalid parameters";
-    default:
-        return "Unknown error";
+    case ERR_UNKNOWN_FMT:  return "Unknown image format";
+    case ERR_FILE_OPEN:    return "Cannot open file";
+    case ERR_FILE_READ:    return "Cannot read file";
+    case ERR_FILE_EMPTY:   return "File is empty";
+    case ERR_MALLOC:       return "Memory allocation failed";
+    case ERR_UNSUPPORTED:  return "Unsupported image format or features";
+    case ERR_CORRUPT_DATA: return "Corrupt or truncated image data";
+    case ERR_DIMENSIONS:   return "Invalid image dimensions";
+    case ERR_DECODE_FAIL:  return "Image decode failed";
+    case ERR_INFLATE_FAIL: return "Decompression failed";
+    case ERR_POOL_FULL:    return "Output buffer too small";
+    case ERR_BAD_PARAMS:   return "Invalid parameters";
+    default:               return "Unknown error";
     }
 }
 
 #define MAX_DIM (65536)
 #define MIN_DIM (1)
+
+/**
+ * @struct CodecConfig
+ * @brief Full chafa canvas configuration.
+ *
+ * Maps 1:1 to chafa's `ChafaCanvasConfig` setters. The first 22 fields
+ * are numeric (int32/float); two 128-byte char buffers at the tail hold
+ * symbol selector strings. Total struct size: 344 bytes.
+ *
+ * Must match byte-for-byte with the definition in addon.c.
+ */
 typedef struct
 {
     int32_t term_w, term_h;
+    int32_t cell_w, cell_h;
     float work_factor;
-    int32_t dither_mode, canvas_mode, preprocessing, bg_color;
+    int32_t dither_mode, canvas_mode, preprocessing;
+    int32_t color_extractor, color_space, pixel_mode;
+    int32_t bg_color, fg_color;
+    int32_t alpha_threshold;
+    int32_t dither_grain_w, dither_grain_h;
+    float dither_intensity;
+    int32_t fg_only, optimizations, passthrough;
     int32_t max_frames;
     float speed;
+    char symbols[128];
+    char fill_symbols[128];
 } CodecConfig;
 
+/**
+ * @struct CodecMetrics
+ * @brief Per-operation timing and metadata.
+ *
+ * All times are in milliseconds on the monotonic clock. The struct
+ * is 68 bytes (4 floats + 13 int32s). Must match byte-for-byte
+ * with addon.c.
+ */
 typedef struct
 {
-    float parse_ms, inflate_ms, defilter_ms, render_ms;
-    int32_t img_w, img_h, frame_count, frame_delay_ms, format;
+    float parse_ms, draw_ms, build_ms, total_ms;
+    int32_t img_w, img_h;
+    int32_t canvas_w, canvas_h, canvas_pw, canvas_ph;
+    int32_t frame_count, frame_delay_ms;
+    int32_t rgba_bytes;
+    int32_t format, canvas_mode, pixel_mode, have_alpha;
 } CodecMetrics;
 
-/* ── helpers ── */
+/* ── decode helpers ── */
 static double now_ms(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
 }
-static int32_t read_u32be(const uint8_t *b) { return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]; }
-static int32_t read_u32le(const uint8_t *b) { return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24); }
-static int32_t read_u16le(const uint8_t *b) { return b[0] | (b[1] << 8); }
 static int32_t abs_i32(int32_t x) { return x < 0 ? -x : x; }
-static uint8_t paeth_u8(uint8_t a, uint8_t b, uint8_t c)
-{
-    int32_t p = (int32_t)a + (int32_t)b - (int32_t)c;
-    int32_t pa = abs_i32(p - (int32_t)a), pb = abs_i32(p - (int32_t)b), pc = abs_i32(p - (int32_t)c);
-    if (pa <= pb && pa <= pc)
-        return a;
-    return pb <= pc ? b : c;
-}
 
 /* ── format detection ── */
-#define FMT_PNG 0
+#define FMT_PNG  0
 #define FMT_JPEG 1
-#define FMT_BMP 2
-#define FMT_GIF 3
+#define FMT_BMP  2
+#define FMT_GIF  3
 #define FMT_WEBP 4
 
 static int detect_format(const uint8_t *data, int32_t len)
@@ -145,24 +203,14 @@ static int detect_format(const uint8_t *data, int32_t len)
         return FMT_BMP;
     if (len >= 6 && data[0] == 'G' && data[1] == 'I' && data[2] == 'F')
         return FMT_GIF;
-    if (len >= 12 && data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' && data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P')
+    if (len >= 12 && data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F'
+        && data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P')
         return FMT_WEBP;
     return -1;
 }
 
-typedef struct
-{
-    uint8_t *raw;
-    uint8_t *uncomp;
-    uint8_t *rgba;
-    CodecMetrics m;
-    int w, h;
-    int is_anim;
-    int fmt;
-} DecodeCtx;
-
 /* ── PNG decode (libpng simplified API) ── */
-static int decode_png(DecodeCtx *c, const uint8_t *buf, int32_t len)
+static int decode_png(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf, int32_t len)
 {
     png_image img;
     memset(&img, 0, sizeof(img));
@@ -170,14 +218,17 @@ static int decode_png(DecodeCtx *c, const uint8_t *buf, int32_t len)
     if (!png_image_begin_read_from_memory(&img, buf, len))
         return -1;
     img.format = PNG_FORMAT_RGBA;
-    c->w = (int)img.width;
-    c->h = (int)img.height;
-    c->rgba = malloc(PNG_IMAGE_SIZE(img));
-    if (!png_image_finish_read(&img, NULL, c->rgba, 0, NULL))
+    int w = (int)img.width, h = (int)img.height;
+    uint8_t *rgba = malloc(PNG_IMAGE_SIZE(img));
+    if (!rgba) return -1;
+    if (!png_image_finish_read(&img, NULL, rgba, 0, NULL))
     {
-        free(c->rgba);
+        free(rgba);
         return -1;
     }
+    *out = rgba;
+    *out_w = w;
+    *out_h = h;
     return 0;
 }
 
@@ -188,6 +239,13 @@ typedef struct
     const uint8_t *data;
     size_t len;
 } jpg_src;
+
+typedef struct
+{
+    struct jpeg_error_mgr pub;
+    jmp_buf jmp;
+} jpg_err;
+
 static void jpg_init(j_decompress_ptr c) { (void)c; }
 static boolean jpg_fill(j_decompress_ptr c)
 {
@@ -205,14 +263,30 @@ static void jpg_skip(j_decompress_ptr c, long n)
         s->pub.bytes_in_buffer -= n;
     }
 }
-
-static int decode_jpeg(DecodeCtx *c, const uint8_t *buf, int32_t len)
+static void jpg_error_exit(j_common_ptr cinfo)
+{
+    jpg_err *e = (jpg_err *)cinfo->err;
+    longjmp(e->jmp, 1);
+}
+static int decode_jpeg(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf, int32_t len)
 {
     struct jpeg_decompress_struct cinfo;
-    struct jpeg_error_mgr jerr;
-    cinfo.err = jpeg_std_error(&jerr);
+    jpg_err jerr;
+    memset(&cinfo, 0, sizeof(cinfo));
+    memset(&jerr, 0, sizeof(jerr));
+
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = jpg_error_exit;
+
+    if (setjmp(jerr.jmp))
+    {
+        jpeg_destroy_decompress(&cinfo);
+        return -1;
+    }
+
     jpeg_create_decompress(&cinfo);
     jpg_src src;
+    memset(&src, 0, sizeof(src));
     src.data = buf;
     src.len = len;
     src.pub.init_source = jpg_init;
@@ -227,28 +301,30 @@ static int decode_jpeg(DecodeCtx *c, const uint8_t *buf, int32_t len)
     jpeg_start_decompress(&cinfo);
     int w = cinfo.output_width, h = cinfo.output_height, rs = w * cinfo.output_components;
     JSAMPARRAY rowbuf = (*cinfo.mem->alloc_sarray)((j_common_ptr)&cinfo, JPOOL_IMAGE, rs, 1);
-    c->rgba = malloc(w * h * 4);
+    uint8_t *rgba = malloc(w * h * 4);
+    if (!rgba) { jpeg_destroy_decompress(&cinfo); return -1; }
     for (int y = 0; y < h; y++)
     {
         jpeg_read_scanlines(&cinfo, rowbuf, 1);
         for (int x = 0; x < w; x++)
         {
             int d = (y * w + x) * 4, s = x * cinfo.output_components;
-            c->rgba[d] = rowbuf[0][s];
-            c->rgba[d + 1] = rowbuf[0][s + 1];
-            c->rgba[d + 2] = rowbuf[0][s + 2];
-            c->rgba[d + 3] = 255;
+            rgba[d] = rowbuf[0][s];
+            rgba[d + 1] = rowbuf[0][s + 1];
+            rgba[d + 2] = rowbuf[0][s + 2];
+            rgba[d + 3] = 255;
         }
     }
     jpeg_finish_decompress(&cinfo);
     jpeg_destroy_decompress(&cinfo);
-    c->w = w;
-    c->h = h;
+    *out = rgba;
+    *out_w = w;
+    *out_h = h;
     return 0;
 }
 
 /* ── BMP decode ── */
-static int decode_bmp(DecodeCtx *c, const uint8_t *buf, int32_t len)
+static int decode_bmp(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf, int32_t len)
 {
     if (len < 30 || buf[0] != 'B' || buf[1] != 'M')
         return -1;
@@ -257,15 +333,14 @@ static int decode_bmp(DecodeCtx *c, const uint8_t *buf, int32_t len)
     int16_t bpp = *(int16_t *)(buf + 28);
     if (off < 30 || off >= len || w <= 0 || ah <= 0 || (bpp != 24 && bpp != 32))
         return -1;
-    c->rgba = malloc(w * ah * 4);
-    c->w = w;
-    c->h = ah;
+    uint8_t *rgba = malloc(w * ah * 4);
+    if (!rgba) return -1;
     int rowBytes = ((bpp == 24 ? w * 3 : w * 4) + 3) & ~3, ch = bpp / 8;
     for (int y = 0; y < ah; y++)
     {
         int sy = td ? y : (ah - 1 - y);
         const uint8_t *src = buf + off + sy * rowBytes;
-        uint8_t *dst = c->rgba + y * w * 4;
+        uint8_t *dst = rgba + y * w * 4;
         for (int x = 0; x < w; x++)
         {
             dst[x * 4 + 2] = src[x * ch];
@@ -274,116 +349,76 @@ static int decode_bmp(DecodeCtx *c, const uint8_t *buf, int32_t len)
             dst[x * 4 + 3] = bpp == 32 ? src[x * 4 + 3] : 255;
         }
     }
+    *out = rgba;
+    *out_w = w;
+    *out_h = ah;
     return 0;
 }
 
-/* ── WebP static ── */
-static int decode_webp_static(DecodeCtx *c, const uint8_t *buf, int32_t len)
+/* ── WebP static decode ── */
+static int decode_webp_static(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf, int32_t len)
 {
     int w, h;
     if (!WebPGetInfo(buf, len, &w, &h))
         return -1;
-    c->rgba = malloc(w * h * 4);
-    c->w = w;
-    c->h = h;
-    return (WebPDecodeRGBAInto(buf, len, c->rgba, w * h * 4, w * 4) == c->rgba) ? 0 : -1;
+    uint8_t *rgba = malloc(w * h * 4);
+    if (!rgba) return -1;
+    if (WebPDecodeRGBAInto(buf, len, rgba, w * h * 4, w * 4) != rgba)
+    {
+        free(rgba);
+        return -1;
+    }
+    *out = rgba;
+    *out_w = w;
+    *out_h = h;
+    return 0;
 }
 
-/* ── GIF decode (stb_image, pre-decoded) ── */
-static int decode_gif(DecodeCtx *c, const uint8_t *buf, int32_t len)
+/* ── GIF decode (stb_image, returns concatenated frames for animation) ── */
+static int decode_gif(uint8_t **out, int *out_w, int *out_h, int *out_frames,
+                      const uint8_t *buf, int32_t len)
 {
     int w, h, frames, comp, *delays;
     uint8_t *data = stbi_load_gif_from_memory((stbi_uc *)buf, len, &delays, &w, &h, &frames, &comp, 4);
     if (!data)
         return -1;
-    c->rgba = data;
-    c->w = w;
-    c->h = h;
-    c->is_anim = (frames > 1);
-    // store frame count in an unused field
     free(delays);
+    *out = data;
+    *out_w = w;
+    *out_h = h;
+    *out_frames = frames;
     return 0;
 }
 
-/* ── defaults ── */
-static void init_config(CodecConfig *cfg)
+/* ── Default config ── */
+/* Perf: work_factor=0.0 is fastest; chafa CLI defaults to 0.5 for better quality.
+   preprocessing=0 skips auto-contrast; chafa CLI defaults to on. */
+static void config_init(CodecConfig *cfg)
 {
+    memset(cfg, 0, sizeof(*cfg));
     cfg->term_w = 80;
-    cfg->term_h = 35;
+    cfg->term_h = 24;
+    cfg->cell_w = 8;
+    cfg->cell_h = 8;
     cfg->work_factor = 0.0f;
-    cfg->dither_mode = 0;
-    cfg->canvas_mode = 0;
-    cfg->preprocessing = 0;
-    cfg->bg_color = 0;
+    cfg->alpha_threshold = 127;
+    cfg->fg_color = 0xffffff;
+    cfg->bg_color = 0x000000;
     cfg->speed = 1.0f;
     cfg->max_frames = -1;
+    cfg->optimizations = 0x7fffffff; /* CHAFA_OPTIMIZATION_ALL */
 }
 
-/* ── pooled buffers for decode output ── */
-static uint8_t *_pool_rgba = NULL;
-static int32_t _pool_rgba_cap = 0;
-static uint8_t *_pool_raw = NULL;
-static int32_t _pool_raw_cap = 0;
-static uint8_t *_pool_idat = NULL;
-static int32_t _pool_idat_cap = 0;
+/* ══════════════════════════════════════════════════════════════════════
+   Context: holds per-instance canvas and animation state
+   ══════════════════════════════════════════════════════════════════════ */
 
-/* ── shared chafa canvas ── */
-static ChafaCanvas *_canvas = NULL;
-static ChafaCanvasConfig *_canvas_cfg = NULL;
-static CodecConfig _last_cfg;
-static int _canvas_ok = 0;
-
-static void ensure_canvas(CodecConfig *cfg)
-{
-    if (_canvas_ok && !memcmp(&_last_cfg, cfg, sizeof(CodecConfig)))
-        return;
-    if (_canvas)
-        chafa_canvas_unref(_canvas);
-    if (_canvas_cfg)
-        chafa_canvas_config_unref(_canvas_cfg);
-    _canvas_cfg = chafa_canvas_config_new();
-    chafa_canvas_config_set_geometry(_canvas_cfg, cfg->term_w, cfg->term_h);
-    chafa_canvas_config_set_canvas_mode(_canvas_cfg, cfg->canvas_mode);
-    chafa_canvas_config_set_pixel_mode(_canvas_cfg, CHAFA_PIXEL_MODE_SYMBOLS);
-    chafa_canvas_config_set_bg_color(_canvas_cfg, cfg->bg_color);
-    chafa_canvas_config_set_work_factor(_canvas_cfg, cfg->work_factor);
-    chafa_canvas_config_set_dither_mode(_canvas_cfg, cfg->dither_mode);
-    chafa_canvas_config_set_preprocessing_enabled(_canvas_cfg, cfg->preprocessing);
-    _canvas = chafa_canvas_new(_canvas_cfg);
-    memcpy(&_last_cfg, cfg, sizeof(CodecConfig));
-    _canvas_ok = 1;
-}
-
-static char *chafa_render_to(uint8_t *rgba, int w, int h, ChafaCanvas *canvas)
-{
-    chafa_canvas_draw_all_pixels(canvas, CHAFA_PIXEL_RGBA8_UNASSOCIATED, rgba, w, h, w * 4);
-    GString *gs = chafa_canvas_build_ansi(canvas);
-    char *result = strdup(gs->str);
-    g_string_free(gs, 1);
-    return result;
-}
-
-static ChafaCanvas *make_anim_canvas(CodecConfig *cfg, ChafaCanvasConfig **out_cfg)
-{
-    ChafaCanvasConfig *cc = chafa_canvas_config_new();
-    chafa_canvas_config_set_geometry(cc, cfg->term_w, cfg->term_h);
-    chafa_canvas_config_set_canvas_mode(cc, cfg->canvas_mode);
-    chafa_canvas_config_set_pixel_mode(cc, CHAFA_PIXEL_MODE_SYMBOLS);
-    chafa_canvas_config_set_bg_color(cc, cfg->bg_color);
-    chafa_canvas_config_set_work_factor(cc, cfg->work_factor);
-    chafa_canvas_config_set_dither_mode(cc, cfg->dither_mode);
-    chafa_canvas_config_set_preprocessing_enabled(cc, cfg->preprocessing);
-    ChafaCanvas *cv = chafa_canvas_new(cc);
-    *out_cfg = cc;
-    return cv;
-}
-
-/* ── animation handle ── */
 typedef enum
 {
     ANIM_GIF,
     ANIM_WEBP
 } AnimType;
+
 typedef struct
 {
     AnimType type;
@@ -397,171 +432,549 @@ typedef struct
     ChafaCanvas *canvas;
     ChafaCanvasConfig *canvas_cfg;
 } AnimHandle;
-static AnimHandle *_handles[16];
 
-static void create_anim_handle(AnimType t, uint8_t *rgba, int frames, int w, int h, uint8_t *buf, int blen)
+/**
+ * @struct CodecCtx
+ * @brief Per-instance rendering context.
+ *
+ * Holds a cached chafa canvas and up to 16 animation handles.
+ * Created by `codec_ctx_new()`, destroyed by `codec_ctx_free()`.
+ * All rendering functions require a valid context.
+ */
+typedef struct CodecCtx
 {
-    for (int i = 0; i < 16; i++)
-    {
-        if (!_handles[i])
-        {
-            _handles[i] = calloc(1, sizeof(AnimHandle));
-            _handles[i]->type = t;
-            _handles[i]->rgbabuf = rgba;
-            _handles[i]->total_frames = frames;
-            _handles[i]->frame_size = w * h * 4;
-            _handles[i]->w = w;
-            _handles[i]->h = h;
-            _handles[i]->idx = 0;
-            _handles[i]->webp_buf = buf;
-            _handles[i]->webp_len = blen;
-            return;
-        }
-    }
+    ChafaCanvas *canvas;
+    ChafaCanvasConfig *canvas_cfg;
+    CodecConfig cfg;
+    int canvas_valid;       /* 1 when canvas matches cfg and symbols */
+    AnimHandle *handles[16];
+} CodecCtx;
+
+/**
+ * @name Context lifecycle
+ * @{
+ */
+/** Create a new rendering context with the given config (or defaults if NULL). */
+CODEC_EXPORT CodecCtx *codec_ctx_new(CodecConfig *cfg);
+/** Free the context and all associated resources (canvas, open animations). */
+CODEC_EXPORT void codec_ctx_free(CodecCtx *ctx);
+/** Update the context's configuration. Invalidates the cached canvas. */
+CODEC_EXPORT void codec_ctx_configure(CodecCtx *ctx, CodecConfig *cfg);
+/** @} */
+
+/**
+ * @name Decode
+ * @{
+ */
+/** Decode any supported format into a caller-owned RGBA buffer. Free with codec_free(). */
+CODEC_EXPORT uint8_t *codec_decode_buffer(char *data, int32_t len,
+                                          int32_t *out_w, int32_t *out_h, int32_t *out_stride,
+                                          CodecMetrics *out, int32_t *err);
+/** Decode into a caller-provided buffer. Returns 0 on success, negative on error. */
+CODEC_EXPORT int codec_decode_into(char *data, int32_t len,
+                                   uint8_t *rgba_out, int32_t rgba_cap,
+                                   int32_t *out_w, int32_t *out_h, int32_t *out_stride,
+                                   CodecMetrics *out, int32_t *err);
+/** @} */
+
+/**
+ * @name Render
+ * Decode an image and render it through chafa to a string output.
+ * All returned strings must be freed with codec_free().
+ * @{
+ */
+/** Decode any supported format and render to an ANSI terminal art string. */
+CODEC_EXPORT char *codec_render(CodecCtx *ctx, char *data, int32_t len,
+                                CodecMetrics *out, int32_t *err);
+/** Render pre-decoded RGBA pixels to an ANSI terminal art string. */
+CODEC_EXPORT char *codec_render_rgba(CodecCtx *ctx, uint8_t *rgba,
+                                     int32_t w, int32_t h, int32_t stride,
+                                     CodecMetrics *out);
+/** Decode any supported format and render to a JSON-encoded cell matrix. */
+CODEC_EXPORT char *codec_render_matrix(CodecCtx *ctx, char *data, int32_t len,
+                                       CodecMetrics *out, int32_t *err);
+/** Render pre-decoded RGBA pixels to a JSON-encoded cell matrix. */
+CODEC_EXPORT char *codec_render_matrix_rgba(CodecCtx *ctx, uint8_t *rgba,
+                                            int32_t w, int32_t h, int32_t stride,
+                                            CodecMetrics *out);
+/** @} */
+
+/**
+ * @name Animation
+ * Frame-by-frame playback of animated GIF and WebP images.
+ * Each context supports up to 16 concurrent animation handles.
+ * @{
+ */
+/** Open an animated GIF or WebP image. Returns handle index (>=0) or -1 on error. */
+CODEC_EXPORT int32_t codec_anim_open(CodecCtx *ctx, char *data, int32_t len,
+                                     CodecMetrics *out, int32_t *err);
+/** Advance to the next frame. Returns frame index (>=0) or -1 when ended. */
+CODEC_EXPORT int32_t codec_anim_next(CodecCtx *ctx, int32_t handle, CodecMetrics *out);
+/** Render a specific frame (by index) to ANSI. Returns allocated string, free with codec_free(). */
+CODEC_EXPORT char *codec_anim_render_frame(CodecCtx *ctx, int32_t handle, int32_t frame_idx,
+                                           CodecMetrics *out);
+/** Rewind playback to the first frame. Returns 0 on success, -1 on error. */
+CODEC_EXPORT int32_t codec_anim_rewind(CodecCtx *ctx, int32_t handle);
+/** Close the animation handle and free all its resources. */
+CODEC_EXPORT void codec_anim_close(CodecCtx *ctx, int32_t handle);
+/** Signal early termination. The handle is marked aborted, no further frames advance. */
+CODEC_EXPORT void codec_anim_abort(CodecCtx *ctx, int32_t handle);
+/** @} */
+
+/** Free any pointer returned by a codec_* function. Safe to call on NULL. */
+CODEC_EXPORT void codec_free(void *p);
+
+/* ── internal helpers ── */
+
+static ChafaCanvasConfig *make_canvas_config(const CodecConfig *cfg)
+{
+    ChafaCanvasConfig *cc = chafa_canvas_config_new();
+    chafa_canvas_config_set_geometry(cc, cfg->term_w, cfg->term_h);
+    chafa_canvas_config_set_cell_geometry(cc, cfg->cell_w, cfg->cell_h);
+    chafa_canvas_config_set_canvas_mode(cc, cfg->canvas_mode);
+    chafa_canvas_config_set_pixel_mode(cc, cfg->pixel_mode);
+    chafa_canvas_config_set_color_extractor(cc, cfg->color_extractor);
+    chafa_canvas_config_set_color_space(cc, cfg->color_space);
+    chafa_canvas_config_set_dither_mode(cc, cfg->dither_mode);
+    if (cfg->dither_grain_w > 0 && cfg->dither_grain_h > 0)
+        chafa_canvas_config_set_dither_grain_size(cc, cfg->dither_grain_w, cfg->dither_grain_h);
+    chafa_canvas_config_set_dither_intensity(cc, cfg->dither_intensity);
+    chafa_canvas_config_set_fg_color(cc, cfg->fg_color);
+    chafa_canvas_config_set_bg_color(cc, cfg->bg_color);
+    chafa_canvas_config_set_transparency_threshold(cc, cfg->alpha_threshold);
+    chafa_canvas_config_set_work_factor(cc, cfg->work_factor);
+    chafa_canvas_config_set_preprocessing_enabled(cc, cfg->preprocessing);
+    chafa_canvas_config_set_fg_only_enabled(cc, cfg->fg_only);
+    chafa_canvas_config_set_optimizations(cc, cfg->optimizations);
+    chafa_canvas_config_set_passthrough(cc, cfg->passthrough);
+    if (cfg->symbols[0])
+        chafa_symbol_map_apply_selectors(
+            (ChafaSymbolMap *)chafa_canvas_config_peek_symbol_map(cc),
+            cfg->symbols, NULL);
+    if (cfg->fill_symbols[0])
+        chafa_symbol_map_apply_selectors(
+            (ChafaSymbolMap *)chafa_canvas_config_peek_fill_symbol_map(cc),
+            cfg->fill_symbols, NULL);
+    return cc;
 }
 
-/* ── public API ── */
-
-CODEC_EXPORT char *codec_render_buffer(char *data, int32_t len, CodecConfig *cfg, CodecMetrics *out, int32_t *err);
-
-CODEC_EXPORT char *codec_render_path(const char *path, CodecConfig *in_cfg, CodecMetrics *out, int32_t *err)
+/* Invalidate the cached canvas so it will be rebuilt on next render */
+static void ctx_invalidate_canvas(CodecCtx *ctx)
 {
-    *err = ERR_OK;
-    if (!path)
+    if (ctx->canvas)
     {
-        *err = ERR_BAD_PARAMS;
-        return strdup(err_string(ERR_BAD_PARAMS));
+        chafa_canvas_unref(ctx->canvas);
+        ctx->canvas = NULL;
     }
-    FILE *f = fopen(path, "rb");
-    if (!f)
+    if (ctx->canvas_cfg)
     {
-        *err = ERR_FILE_OPEN;
-        return strdup(err_string(ERR_FILE_OPEN));
+        chafa_canvas_config_unref(ctx->canvas_cfg);
+        ctx->canvas_cfg = NULL;
     }
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (sz <= 0)
+    ctx->canvas_valid = 0;
+}
+
+/* Ensure ctx has a valid canvas matching its current config.
+   Returns 0 on success, -1 on allocation failure. */
+static int ctx_ensure_canvas(CodecCtx *ctx)
+{
+    if (ctx->canvas_valid)
+        return 0;
+
+    ctx_invalidate_canvas(ctx);
+    ctx->canvas_cfg = make_canvas_config(&ctx->cfg);
+    if (!ctx->canvas_cfg)
+        return -1;
+    ctx->canvas = chafa_canvas_new(ctx->canvas_cfg);
+    if (!ctx->canvas)
     {
-        fclose(f);
-        *err = ERR_FILE_EMPTY;
-        return strdup(err_string(ERR_FILE_EMPTY));
+        chafa_canvas_config_unref(ctx->canvas_cfg);
+        ctx->canvas_cfg = NULL;
+        return -1;
     }
-    uint8_t *buf = malloc(sz);
-    if (!buf)
-    {
-        fclose(f);
-        *err = ERR_MALLOC;
-        return strdup(err_string(ERR_MALLOC));
-    }
-    if (fread(buf, 1, sz, f) != (size_t)sz)
-    {
-        free(buf);
-        fclose(f);
-        *err = ERR_FILE_READ;
-        return strdup(err_string(ERR_FILE_READ));
-    }
-    fclose(f);
-    CodecConfig cfg;
-    memcpy(&cfg, in_cfg, sizeof(CodecConfig));
-    char *result = codec_render_buffer((char *)buf, sz, &cfg, out, err);
-    free(buf);
+    ctx->canvas_valid = 1;
+    return 0;
+}
+
+/* Extract canvas metadata into metrics struct */
+static void fill_canvas_metrics(ChafaCanvas *canvas, CodecMetrics *m)
+{
+    const ChafaCanvasConfig *ccfg = chafa_canvas_peek_config(canvas);
+    gint gw = 0, gh = 0;
+    chafa_canvas_config_get_geometry(ccfg, &gw, &gh);
+    m->canvas_w = gw;
+    m->canvas_h = gh;
+    m->canvas_pw = canvas->width_pixels;
+    m->canvas_ph = canvas->height_pixels;
+    m->canvas_mode = (int32_t)chafa_canvas_config_get_canvas_mode(ccfg);
+    m->pixel_mode = (int32_t)chafa_canvas_config_get_pixel_mode(ccfg);
+    m->have_alpha = canvas->have_alpha;
+}
+
+/* Draw RGBA pixels to canvas, then build ANSI string.
+   Fills draw_ms, build_ms, total_ms, img_w, img_h, and canvas metadata in *m.
+   Returns allocated string (caller must codec_free). */
+static char *canvas_draw_and_build(ChafaCanvas *canvas, uint8_t *rgba,
+                                   int32_t w, int32_t h, int32_t stride,
+                                   CodecMetrics *m)
+{
+    double t0 = now_ms();
+    chafa_canvas_draw_all_pixels(canvas, CHAFA_PIXEL_RGBA8_UNASSOCIATED,
+                                 rgba, w, h, stride > 0 ? stride : w * 4);
+    double t1 = now_ms();
+    GString *gs = chafa_canvas_print(canvas, NULL);
+    double t2 = now_ms();
+
+    m->draw_ms = (float)(t1 - t0);
+    m->build_ms = (float)(t2 - t1);
+    m->total_ms = m->parse_ms + m->draw_ms + m->build_ms;
+    m->img_w = w;
+    m->img_h = h;
+    fill_canvas_metrics(canvas, m);
+
+    char *result = strdup(gs->str);
+    g_string_free(gs, 1);
     return result;
 }
 
-CODEC_EXPORT char *codec_render_buffer(char *data, int32_t len, CodecConfig *cfg, CodecMetrics *out, int32_t *err)
+/* Build a JSON matrix string from canvas cells.
+   Format: [[[charCode,fg,fb],[...]], ...]  (row-major 2D array of [char,fg,bg] triples)
+   Returns allocated string (caller must codec_free). */
+static char *canvas_build_matrix(ChafaCanvas *canvas, CodecMetrics *m)
 {
-    *err = ERR_OK;
-    memset(out, 0, sizeof(CodecMetrics));
-    DecodeCtx dctx = {0};
+    const ChafaCanvasConfig *ccfg = chafa_canvas_peek_config(canvas);
+    gint cw = canvas->config.width;
+    gint ch = canvas->config.height;
+    fill_canvas_metrics(canvas, m);
 
-    if (!data || len <= 0)
-    {
-        *err = ERR_BAD_PARAMS;
-        return strdup(err_string(ERR_BAD_PARAMS));
-    }
-    if (len < 8)
-    {
-        *err = ERR_FILE_EMPTY;
-        return strdup(err_string(ERR_FILE_EMPTY));
-    }
+    /* Estimate output size: ~25 bytes per cell + delimiters */
+    gsize est = (gsize)cw * (gsize)ch * 28 + 256;
+    GString *gs = g_string_sized_new(est);
+    if (!gs) return NULL;
+    g_string_append_c(gs, '[');
 
-    int fmt = detect_format((uint8_t *)data, len);
+    for (gint y = 0; y < ch; y++)
+    {
+        if (y > 0) g_string_append_c(gs, ',');
+        g_string_append_c(gs, '[');
+        for (gint x = 0; x < cw; x++)
+        {
+            gint fg = 0, bg = 0;
+            gunichar c = chafa_canvas_get_char_at(canvas, x, y);
+            chafa_canvas_get_raw_colors_at(canvas, x, y, &fg, &bg);
+            if (x > 0) g_string_append_c(gs, ',');
+            g_string_append_printf(gs, "[%u,%d,%d]", (unsigned)c, fg, bg);
+        }
+        g_string_append_c(gs, ']');
+    }
+    g_string_append_c(gs, ']');
+
+    char *result = strdup(gs->str);
+    g_string_free(gs, 1);
+    return result;
+}
+
+/* ── Decode a buffer into RGBA pixels ── */
+static uint8_t *decode_image(const uint8_t *data, int32_t len,
+                             int *out_w, int *out_h, int *out_frames,
+                             CodecMetrics *out)
+{
+    int fmt = detect_format(data, len);
     out->format = fmt;
-    if (fmt < 0)
-    {
-        *err = ERR_UNKNOWN_FMT;
-        return strdup(err_string(ERR_UNKNOWN_FMT));
-    }
-    if (cfg->term_w < 1 || cfg->term_h < 1)
-    {
-        *err = ERR_BAD_PARAMS;
-        return strdup("ERROR: terminal dimensions must be positive");
-    }
+    if (fmt < 0) return NULL;
 
-    double t0 = now_ms(), t1;
-    int decode_err = 0;
+    double t0 = now_ms();
+    uint8_t *rgba = NULL;
+    int w = 0, h = 0, frames = 1;
+    int r = -1;
+
     switch (fmt)
     {
     case FMT_PNG:
-        decode_err = decode_png(&dctx, (uint8_t *)data, len);
+        r = decode_png(&rgba, &w, &h, data, len);
         break;
     case FMT_JPEG:
-        decode_err = decode_jpeg(&dctx, (uint8_t *)data, len);
+        r = decode_jpeg(&rgba, &w, &h, data, len);
         break;
     case FMT_BMP:
-        decode_err = decode_bmp(&dctx, (uint8_t *)data, len);
+        r = decode_bmp(&rgba, &w, &h, data, len);
         break;
     case FMT_WEBP:
-        decode_err = decode_webp_static(&dctx, (uint8_t *)data, len);
+        r = decode_webp_static(&rgba, &w, &h, data, len);
         break;
     case FMT_GIF:
-        decode_err = decode_gif(&dctx, (uint8_t *)data, len);
+        r = decode_gif(&rgba, &w, &h, &frames, data, len);
         break;
     default:
-        *err = ERR_UNSUPPORTED;
-        return strdup(err_string(ERR_UNSUPPORTED));
+        return NULL;
     }
-    if (decode_err)
+
+    if (r != 0 || !rgba || w < MIN_DIM || w > MAX_DIM || h < MIN_DIM || h > MAX_DIM)
     {
-        *err = ERR_DECODE_FAIL;
-        return strdup(err_string(ERR_DECODE_FAIL));
+        free(rgba);
+        return NULL;
     }
 
-    if (dctx.w < MIN_DIM || dctx.w > MAX_DIM || dctx.h < MIN_DIM || dctx.h > MAX_DIM)
-    {
-        *err = ERR_DIMENSIONS;
-        free(dctx.rgba);
-        return strdup(err_string(ERR_DIMENSIONS));
-    }
-
-    t1 = now_ms();
-    out->parse_ms = (float)(t1 - t0);
-    out->img_w = dctx.w;
-    out->img_h = dctx.h;
-    out->frame_count = 1;
-
-    ensure_canvas(cfg);
-    char *ansi = chafa_render_to(dctx.rgba, dctx.w, dctx.h, _canvas);
-    out->render_ms = (float)(now_ms() - t1);
-    free(dctx.rgba);
-    return ansi;
+    out->parse_ms = (float)(now_ms() - t0);
+    out->img_w = w;
+    out->img_h = h;
+    out->rgba_bytes = w * h * 4;
+    if (out_frames)
+        *out_frames = frames;
+    *out_w = w;
+    *out_h = h;
+    return rgba;
 }
 
-CODEC_EXPORT int32_t codec_anim_open_buffer(char *data, int32_t len, CodecConfig *cfg, CodecMetrics *out, int32_t *err)
+/* ══════════════════════════════════════════════════════════════════════
+   Public API
+   ══════════════════════════════════════════════════════════════════════ */
+
+CODEC_EXPORT CodecCtx *codec_ctx_new(CodecConfig *cfg)
+{
+    CodecCtx *ctx = calloc(1, sizeof(CodecCtx));
+    if (!ctx) return NULL;
+    if (cfg)
+        memcpy(&ctx->cfg, cfg, sizeof(CodecConfig));
+    else
+        config_init(&ctx->cfg);
+    return ctx;
+}
+
+CODEC_EXPORT void codec_ctx_free(CodecCtx *ctx)
+{
+    if (!ctx) return;
+    ctx_invalidate_canvas(ctx);
+    for (int i = 0; i < 16; i++)
+    {
+        if (ctx->handles[i])
+            codec_anim_close(ctx, i);
+    }
+    free(ctx);
+}
+
+CODEC_EXPORT void codec_ctx_configure(CodecCtx *ctx, CodecConfig *cfg)
+{
+    if (!ctx || !cfg) return;
+    memcpy(&ctx->cfg, cfg, sizeof(CodecConfig));
+    ctx->canvas_valid = 0;
+}
+
+/* ── decode_buffer: decode any supported format -> RGBA pixels ── */
+/* Caller must free the returned buffer with codec_free() */
+CODEC_EXPORT uint8_t *codec_decode_buffer(char *data, int32_t len,
+                                          int32_t *out_w, int32_t *out_h, int32_t *out_stride,
+                                          CodecMetrics *out, int32_t *err)
 {
     *err = ERR_OK;
     memset(out, 0, sizeof(CodecMetrics));
-    if (!data || len <= 0)
+    if (!data || len <= 0) { *err = ERR_BAD_PARAMS; return NULL; }
+
+    int w = 0, h = 0;
+    uint8_t *rgba = decode_image((uint8_t *)data, len, &w, &h, NULL, out);
+    if (!rgba) { *err = ERR_DECODE_FAIL; return NULL; }
+
+    *out_w = w;
+    *out_h = h;
+    *out_stride = w * 4;
+    out->frame_count = 1;
+    return rgba;
+}
+
+/* ── decode_into: decode -> caller-provided RGBA buffer (for FFI paths) ── */
+CODEC_EXPORT int codec_decode_into(char *data, int32_t len,
+                                   uint8_t *rgba_out, int32_t rgba_cap,
+                                   int32_t *out_w, int32_t *out_h, int32_t *out_stride,
+                                   CodecMetrics *out, int32_t *err)
+{
+    int w = 0, h = 0;
+    memset(out, 0, sizeof(CodecMetrics));
+    if (!data || len <= 0) { *err = ERR_BAD_PARAMS; return ERR_BAD_PARAMS; }
+
+    uint8_t *rgba = decode_image((uint8_t *)data, len, &w, &h, NULL, out);
+    if (!rgba) { *err = ERR_DECODE_FAIL; return ERR_DECODE_FAIL; }
+
+    int needed = h * w * 4;
+    if (rgba_out && rgba_cap >= needed)
+        memcpy(rgba_out, rgba, needed);
+    else if (rgba_out)
+        { free(rgba); *err = ERR_POOL_FULL; return ERR_POOL_FULL; }
+
+    free(rgba);
+
+    if (rgba_out)
     {
-        *err = ERR_BAD_PARAMS;
-        return -1;
+        *out_w = w;
+        *out_h = h;
+        *out_stride = w * 4;
     }
-    if (cfg->term_w < 1 || cfg->term_h < 1)
+    else
     {
-        *err = ERR_BAD_PARAMS;
-        return -1;
+        *out_w = w;
+        *out_h = h;
+        *out_stride = w * 4;
+        *err = ERR_OK;
     }
+    return ERR_OK;
+}
+
+/* ── render: decode + render -> ANSI string ── */
+CODEC_EXPORT char *codec_render(CodecCtx *ctx, char *data, int32_t len,
+                                CodecMetrics *out, int32_t *err)
+{
+    *err = ERR_OK;
+    memset(out, 0, sizeof(CodecMetrics));
+    if (!ctx || !data || len <= 0) { *err = ERR_BAD_PARAMS; return strdup(err_string(ERR_BAD_PARAMS)); }
+
+    int w = 0, h = 0;
+    uint8_t *rgba = decode_image((uint8_t *)data, len, &w, &h, NULL, out);
+    if (!rgba) { *err = ERR_DECODE_FAIL; return strdup(err_string(ERR_DECODE_FAIL)); }
+
+    out->frame_count = 1;
+
+    if (ctx_ensure_canvas(ctx) != 0)
+    {
+        free(rgba);
+        *err = ERR_MALLOC;
+        return strdup(err_string(ERR_MALLOC));
+    }
+
+    char *ansi = canvas_draw_and_build(ctx->canvas, rgba, w, h, w * 4, out);
+    free(rgba);
+    return ansi;
+}
+
+/* ── render_rgba: pre-decoded RGBA -> ANSI string ── */
+CODEC_EXPORT char *codec_render_rgba(CodecCtx *ctx, uint8_t *rgba,
+                                     int32_t w, int32_t h, int32_t stride,
+                                     CodecMetrics *out)
+{
+    memset(out, 0, sizeof(CodecMetrics));
+    if (!ctx || !rgba || w <= 0 || h <= 0) return strdup(err_string(ERR_BAD_PARAMS));
+
+    if (ctx_ensure_canvas(ctx) != 0)
+        return strdup(err_string(ERR_MALLOC));
+
+    out->img_w = w;
+    out->img_h = h;
+    out->frame_count = 1;
+    out->rgba_bytes = h * (stride > 0 ? stride : w * 4);
+    return canvas_draw_and_build(ctx->canvas, rgba, w, h, stride > 0 ? stride : w * 4, out);
+}
+
+/* ── matrix: decode + render -> JSON cell grid ── */
+CODEC_EXPORT char *codec_render_matrix(CodecCtx *ctx, char *data, int32_t len,
+                                       CodecMetrics *out, int32_t *err)
+{
+    *err = ERR_OK;
+    memset(out, 0, sizeof(CodecMetrics));
+    if (!ctx || !data || len <= 0) { *err = ERR_BAD_PARAMS; return strdup("[]"); }
+
+    int w = 0, h = 0;
+    uint8_t *rgba = decode_image((uint8_t *)data, len, &w, &h, NULL, out);
+    if (!rgba) { *err = ERR_DECODE_FAIL; return strdup("[]"); }
+
+    out->frame_count = 1;
+
+    if (ctx_ensure_canvas(ctx) != 0)
+    {
+        free(rgba);
+        *err = ERR_MALLOC;
+        return strdup("[]");
+    }
+
+    {
+        double t0 = now_ms();
+        chafa_canvas_draw_all_pixels(ctx->canvas, CHAFA_PIXEL_RGBA8_UNASSOCIATED,
+                                     rgba, w, h, w * 4);
+        out->draw_ms = (float)(now_ms() - t0);
+    }
+    free(rgba);
+
+    char *json = canvas_build_matrix(ctx->canvas, out);
+    out->total_ms = out->parse_ms + out->draw_ms;
+    return json ? json : strdup("[]");
+}
+
+/* ── render_matrix_rgba: pre-decoded RGBA -> JSON cell grid ── */
+CODEC_EXPORT char *codec_render_matrix_rgba(CodecCtx *ctx, uint8_t *rgba,
+                                            int32_t w, int32_t h, int32_t stride,
+                                            CodecMetrics *out)
+{
+    memset(out, 0, sizeof(CodecMetrics));
+    if (!ctx || !rgba || w <= 0 || h <= 0) return strdup("[]");
+
+    if (ctx_ensure_canvas(ctx) != 0)
+        return strdup("[]");
+
+    out->img_w = w;
+    out->img_h = h;
+    out->frame_count = 1;
+    out->rgba_bytes = h * (stride > 0 ? stride : w * 4);
+
+    {
+        double t0 = now_ms();
+        chafa_canvas_draw_all_pixels(ctx->canvas, CHAFA_PIXEL_RGBA8_UNASSOCIATED,
+                                     rgba, w, h, stride > 0 ? stride : w * 4);
+        out->draw_ms = (float)(now_ms() - t0);
+    }
+
+    char *json = canvas_build_matrix(ctx->canvas, out);
+    out->total_ms = out->parse_ms + out->draw_ms;
+    return json ? json : strdup("[]");
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Animation
+   ══════════════════════════════════════════════════════════════════════ */
+
+static AnimHandle *anim_create(CodecCtx *ctx, AnimType type, uint8_t *rgba,
+                               int frames, int w, int h, uint8_t *raw_buf, int raw_len,
+                               CodecConfig *cfg)
+{
+    /* Destroy existing canvas so make_canvas_config gets fresh symbol maps */
+    ctx_invalidate_canvas(ctx);
+
+    AnimHandle *ah = calloc(1, sizeof(AnimHandle));
+    if (!ah) return NULL;
+    ah->type = type;
+    ah->rgbabuf = rgba;
+    ah->total_frames = frames;
+    ah->frame_size = w * h * 4;
+    ah->w = w;
+    ah->h = h;
+    ah->idx = 0;
+
+    /* Each animation gets its own canvas (not the shared ctx canvas) */
+    ah->canvas_cfg = make_canvas_config(cfg);
+    if (!ah->canvas_cfg) { free(ah); return NULL; }
+    ah->canvas = chafa_canvas_new(ah->canvas_cfg);
+    if (!ah->canvas) { chafa_canvas_config_unref(ah->canvas_cfg); free(ah); return NULL; }
+
+    /* Rebuild context canvas with original config */
+    ctx->canvas_valid = 0;
+
+    for (int i = 0; i < 16; i++)
+    {
+        if (!ctx->handles[i])
+        {
+            ctx->handles[i] = ah;
+            return ah;
+        }
+    }
+    chafa_canvas_unref(ah->canvas);
+    chafa_canvas_config_unref(ah->canvas_cfg);
+    free(ah);
+    return NULL;
+}
+
+CODEC_EXPORT int32_t codec_anim_open(CodecCtx *ctx, char *data, int32_t len,
+                                     CodecMetrics *out, int32_t *err)
+{
+    *err = ERR_OK;
+    memset(out, 0, sizeof(CodecMetrics));
+    if (!ctx || !data || len <= 0) { *err = ERR_BAD_PARAMS; return -1; }
+
     int fmt = detect_format((uint8_t *)data, len);
     out->format = fmt;
 
@@ -572,12 +985,17 @@ CODEC_EXPORT int32_t codec_anim_open_buffer(char *data, int32_t len, CodecConfig
         WebPAnimDecoderOptionsInit(&opts);
         opts.color_mode = MODE_RGBA;
         WebPAnimDecoder *dec = WebPAnimDecoderNew(&wpd, &opts);
-        if (!dec)
-            return -1;
+        if (!dec) { *err = ERR_DECODE_FAIL; return -1; }
+
         WebPAnimInfo inf;
         WebPAnimDecoderGetInfo(dec, &inf);
         int w = inf.canvas_width, iH = inf.canvas_height, fs = w * iH * 4;
-        uint8_t *pool = malloc(fs * 500 > 256 * 1024 * 1024 ? 256 * 1024 * 1024 : fs * 500);
+        /* Allocate pool for decoded frames (max 500 frames or 256MB) */
+        int pool_cap = fs * 500;
+        if (pool_cap > 256 * 1024 * 1024) pool_cap = 256 * 1024 * 1024;
+        uint8_t *pool = malloc(pool_cap);
+        if (!pool) { WebPAnimDecoderDelete(dec); *err = ERR_MALLOC; return -1; }
+
         uint8_t *fbuf;
         int ts, prev_ts = 0;
         if (!WebPAnimDecoderGetNext(dec, &fbuf, &ts))
@@ -592,7 +1010,15 @@ CODEC_EXPORT int32_t codec_anim_open_buffer(char *data, int32_t len, CodecConfig
         out->img_h = iH;
         out->frame_delay_ms = ts;
         out->frame_count = -1;
+
         AnimHandle *ah = calloc(1, sizeof(AnimHandle));
+        if (!ah)
+        {
+            WebPAnimDecoderDelete(dec);
+            free(pool);
+            *err = ERR_MALLOC;
+            return -1;
+        }
         ah->type = ANIM_WEBP;
         ah->rgbabuf = pool;
         ah->w = w;
@@ -601,22 +1027,72 @@ CODEC_EXPORT int32_t codec_anim_open_buffer(char *data, int32_t len, CodecConfig
         ah->total_frames = -1;
         ah->idx = 1;
         ah->delays = malloc(sizeof(int) * 1000);
+        if (!ah->delays)
+        {
+            WebPAnimDecoderDelete(dec);
+            free(pool);
+            free(ah);
+            *err = ERR_MALLOC;
+            return -1;
+        }
         ah->delays[0] = ts;
         ah->webp_dec = dec;
         ah->prev_ts = ts;
         ah->webp_len = len;
         ah->webp_buf = malloc(len);
+        if (!ah->webp_buf)
+        {
+            WebPAnimDecoderDelete(dec);
+            free(pool);
+            free(ah->delays);
+            free(ah);
+            *err = ERR_MALLOC;
+            return -1;
+        }
         memcpy(ah->webp_buf, data, len);
-        ah->canvas = make_anim_canvas(cfg, &ah->canvas_cfg);
+
+        /* Create animation's own canvas from the current context config */
+        ah->canvas_cfg = make_canvas_config(&ctx->cfg);
+        if (!ah->canvas_cfg)
+        {
+            WebPAnimDecoderDelete(dec);
+            free(pool);
+            free(ah->delays);
+            free(ah->webp_buf);
+            free(ah);
+            *err = ERR_MALLOC;
+            return -1;
+        }
+        ah->canvas = chafa_canvas_new(ah->canvas_cfg);
+        if (!ah->canvas)
+        {
+            chafa_canvas_config_unref(ah->canvas_cfg);
+            WebPAnimDecoderDelete(dec);
+            free(pool);
+            free(ah->delays);
+            free(ah->webp_buf);
+            free(ah);
+            *err = ERR_MALLOC;
+            return -1;
+        }
+        fill_canvas_metrics(ah->canvas, out);
+
         for (int i = 0; i < 16; i++)
-            if (!_handles[i])
+            if (!ctx->handles[i])
             {
-                _handles[i] = ah;
+                ctx->handles[i] = ah;
                 return i;
             }
+
+        /* No free slot */
+        chafa_canvas_unref(ah->canvas);
+        chafa_canvas_config_unref(ah->canvas_cfg);
         WebPAnimDecoderDelete(dec);
         free(pool);
+        free(ah->delays);
+        free(ah->webp_buf);
         free(ah);
+        *err = ERR_POOL_FULL;
         return -1;
     }
 
@@ -625,13 +1101,27 @@ CODEC_EXPORT int32_t codec_anim_open_buffer(char *data, int32_t len, CodecConfig
         int iw, ih, frames, comp, *delays;
         uint8_t *data8 = stbi_load_gif_from_memory((stbi_uc *)data, len, &delays, &iw, &ih, &frames, &comp, 4);
         if (!data8 || frames < 2)
+        {
+            free(data8);
+            free(delays);
+            *err = ERR_DECODE_FAIL;
             return -1;
-        int maxf = cfg->max_frames > 0 && cfg->max_frames < frames ? cfg->max_frames : frames;
+        }
+        int maxf = ctx->cfg.max_frames > 0 && ctx->cfg.max_frames < frames
+                       ? ctx->cfg.max_frames : frames;
         out->img_w = iw;
         out->img_h = ih;
         out->frame_count = maxf;
         out->frame_delay_ms = delays[0];
+
         AnimHandle *ah = calloc(1, sizeof(AnimHandle));
+        if (!ah)
+        {
+            stbi_image_free(data8);
+            stbi_image_free(delays);
+            *err = ERR_MALLOC;
+            return -1;
+        }
         ah->type = ANIM_GIF;
         ah->rgbabuf = data8;
         ah->w = iw;
@@ -640,43 +1130,69 @@ CODEC_EXPORT int32_t codec_anim_open_buffer(char *data, int32_t len, CodecConfig
         ah->total_frames = maxf;
         ah->idx = 0;
         ah->delays = delays;
-        ah->canvas = make_anim_canvas(cfg, &ah->canvas_cfg);
+
+        ah->canvas_cfg = make_canvas_config(&ctx->cfg);
+        if (!ah->canvas_cfg)
+        {
+            stbi_image_free(data8);
+            stbi_image_free(delays);
+            free(ah);
+            *err = ERR_MALLOC;
+            return -1;
+        }
+        ah->canvas = chafa_canvas_new(ah->canvas_cfg);
+        if (!ah->canvas)
+        {
+            chafa_canvas_config_unref(ah->canvas_cfg);
+            stbi_image_free(data8);
+            stbi_image_free(delays);
+            free(ah);
+            *err = ERR_MALLOC;
+            return -1;
+        }
+        fill_canvas_metrics(ah->canvas, out);
+
         for (int i = 0; i < 16; i++)
-            if (!_handles[i])
+            if (!ctx->handles[i])
             {
-                _handles[i] = ah;
+                ctx->handles[i] = ah;
                 return i;
             }
+
+        chafa_canvas_unref(ah->canvas);
+        chafa_canvas_config_unref(ah->canvas_cfg);
         stbi_image_free(data8);
         stbi_image_free(delays);
         free(ah);
+        *err = ERR_POOL_FULL;
         return -1;
     }
+
+    *err = ERR_UNSUPPORTED;
     return -1;
 }
 
-CODEC_EXPORT int32_t codec_anim_next(int32_t handle, CodecMetrics *out)
+CODEC_EXPORT int32_t codec_anim_next(CodecCtx *ctx, int32_t handle, CodecMetrics *out)
 {
-    if (handle < 0 || handle >= 16 || !_handles[handle])
-        return -1;
-    AnimHandle *h = _handles[handle];
-    if (h->aborted)
-        return -1;
     memset(out, 0, sizeof(CodecMetrics));
+    if (!ctx || handle < 0 || handle >= 16 || !ctx->handles[handle])
+        return -1;
+    AnimHandle *h = ctx->handles[handle];
+    if (h->aborted) return -1;
     out->img_w = h->w;
     out->img_h = h->h;
 
     if (h->type == ANIM_GIF)
     {
-        if (h->idx >= h->total_frames)
-            return -1;
+        out->format = FMT_GIF;
+        if (h->idx >= h->total_frames) return -1;
         out->frame_delay_ms = h->delays ? h->delays[h->idx] : 100;
         return h->idx++;
     }
     if (h->type == ANIM_WEBP)
     {
-        if (h->done)
-            return -1;
+        out->format = FMT_WEBP;
+        if (h->done) return -1;
         uint8_t *fbuf;
         int ts;
         if (!WebPAnimDecoderGetNext(h->webp_dec, &fbuf, &ts))
@@ -684,10 +1200,16 @@ CODEC_EXPORT int32_t codec_anim_next(int32_t handle, CodecMetrics *out)
             h->done = 1;
             return -1;
         }
-        memcpy(h->rgbabuf + h->idx * h->frame_size, fbuf, h->frame_size);
+        /* Check that we don't overflow the pool */
+        int offset = h->idx * h->frame_size;
+        if (offset + h->frame_size > 256 * 1024 * 1024)
+        {
+            h->done = 1;
+            return -1;
+        }
+        memcpy(h->rgbabuf + offset, fbuf, h->frame_size);
         int delta = ts - h->prev_ts;
-        if (delta < 0)
-            delta = h->delays ? h->delays[0] : 100;
+        if (delta < 0) delta = h->delays ? h->delays[0] : 100;
         out->frame_delay_ms = delta;
         h->delays[h->idx] = delta;
         h->prev_ts = ts;
@@ -696,16 +1218,38 @@ CODEC_EXPORT int32_t codec_anim_next(int32_t handle, CodecMetrics *out)
     return -1;
 }
 
-CODEC_EXPORT int32_t codec_anim_rewind(int32_t handle)
+CODEC_EXPORT uint8_t *codec_anim_frame_data(CodecCtx *ctx, int32_t handle, int32_t frame_idx)
 {
-    if (handle < 0 || handle >= 16 || !_handles[handle])
+    if (!ctx || handle < 0 || handle >= 16 || !ctx->handles[handle])
+        return NULL;
+    AnimHandle *h = ctx->handles[handle];
+    if (frame_idx < 0 || frame_idx >= h->idx)
+        return NULL;
+    return h->rgbabuf + frame_idx * h->frame_size;
+}
+
+CODEC_EXPORT char *codec_anim_render_frame(CodecCtx *ctx, int32_t handle, int32_t frame_idx,
+                                           CodecMetrics *out)
+{
+    memset(out, 0, sizeof(CodecMetrics));
+    if (!ctx || handle < 0 || handle >= 16 || !ctx->handles[handle])
+        return strdup("");
+    AnimHandle *h = ctx->handles[handle];
+    uint8_t *data = codec_anim_frame_data(ctx, handle, frame_idx);
+    if (!data) return strdup("");
+    out->frame_delay_ms = h->delays ? h->delays[frame_idx] : 100;
+    out->frame_count = h->total_frames;
+    out->format = (h->type == ANIM_GIF) ? FMT_GIF : FMT_WEBP;
+    out->rgba_bytes = h->w * h->h * 4;
+    return canvas_draw_and_build(h->canvas, data, h->w, h->h, h->w * 4, out);
+}
+
+CODEC_EXPORT int32_t codec_anim_rewind(CodecCtx *ctx, int32_t handle)
+{
+    if (!ctx || handle < 0 || handle >= 16 || !ctx->handles[handle])
         return -1;
-    AnimHandle *h = _handles[handle];
-    if (h->type == ANIM_GIF)
-    {
-        h->idx = 0;
-        return 0;
-    }
+    AnimHandle *h = ctx->handles[handle];
+    if (h->type == ANIM_GIF) { h->idx = 0; return 0; }
     if (h->type == ANIM_WEBP)
     {
         WebPAnimDecoderDelete(h->webp_dec);
@@ -714,8 +1258,7 @@ CODEC_EXPORT int32_t codec_anim_rewind(int32_t handle)
         WebPAnimDecoderOptionsInit(&opts);
         opts.color_mode = MODE_RGBA;
         h->webp_dec = WebPAnimDecoderNew(&wpd, &opts);
-        if (!h->webp_dec)
-            return -1;
+        if (!h->webp_dec) return -1;
         h->idx = 0;
         h->done = 0;
         h->prev_ts = 0;
@@ -724,33 +1267,11 @@ CODEC_EXPORT int32_t codec_anim_rewind(int32_t handle)
     return -1;
 }
 
-CODEC_EXPORT uint8_t *codec_anim_frame_data(int32_t handle, int32_t frame_idx)
+CODEC_EXPORT void codec_anim_close(CodecCtx *ctx, int32_t handle)
 {
-    if (handle < 0 || handle >= 16 || !_handles[handle])
-        return NULL;
-    AnimHandle *h = _handles[handle];
-    if (frame_idx < 0 || frame_idx >= h->idx)
-        return NULL;
-    return h->rgbabuf + frame_idx * h->frame_size;
-}
-
-CODEC_EXPORT char *codec_anim_render_frame(int32_t handle, int32_t frame_idx, CodecMetrics *out)
-{
-    if (handle < 0 || handle >= 16 || !_handles[handle])
-        return strdup("ERROR: invalid handle");
-    AnimHandle *h = _handles[handle];
-    uint8_t *data = codec_anim_frame_data(handle, frame_idx);
-    if (!data)
-        return strdup("");
-    out->frame_delay_ms = h->delays ? h->delays[frame_idx] : 100;
-    return chafa_render_to(data, h->w, h->h, h->canvas);
-}
-
-CODEC_EXPORT void codec_anim_close(int32_t handle)
-{
-    if (handle < 0 || handle >= 16 || !_handles[handle])
+    if (!ctx || handle < 0 || handle >= 16 || !ctx->handles[handle])
         return;
-    AnimHandle *h = _handles[handle];
+    AnimHandle *h = ctx->handles[handle];
     if (h->type == ANIM_GIF)
     {
         stbi_image_free(h->rgbabuf);
@@ -763,23 +1284,20 @@ CODEC_EXPORT void codec_anim_close(int32_t handle)
         free(h->delays);
         free(h->webp_buf);
     }
-    if (h->canvas)
-        chafa_canvas_unref(h->canvas);
-    if (h->canvas_cfg)
-        chafa_canvas_config_unref(h->canvas_cfg);
+    if (h->canvas)       chafa_canvas_unref(h->canvas);
+    if (h->canvas_cfg)   chafa_canvas_config_unref(h->canvas_cfg);
     free(h);
-    _handles[handle] = NULL;
+    ctx->handles[handle] = NULL;
 }
 
-CODEC_EXPORT void codec_anim_abort(int32_t handle)
+CODEC_EXPORT void codec_anim_abort(CodecCtx *ctx, int32_t handle)
 {
-    if (handle < 0 || handle >= 16 || !_handles[handle])
+    if (!ctx || handle < 0 || handle >= 16 || !ctx->handles[handle])
         return;
-    _handles[handle]->aborted = 1;
+    ctx->handles[handle]->aborted = 1;
 }
 
-CODEC_EXPORT void codec_free_string(char *s)
+CODEC_EXPORT void codec_free(void *p)
 {
-    if (s)
-        free(s);
+    free(p);
 }
