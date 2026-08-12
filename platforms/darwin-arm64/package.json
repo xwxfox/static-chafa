@@ -1,1 +1,1 @@
-{"name":"@static-chafa/darwin-arm64","version":"1.0.4","publishConfig":{"access":"public"},"os":["darwin"],"cpu":["arm64"],"main":"static_chafa.node","files":["static_chafa.node"]}
+{"name":"@static-chafa/darwin-arm64","version":"1.0.5","publishConfig":{"access":"public"},"os":["darwin"],"cpu":["arm64"],"main":"static_chafa.node","files":["static_chafa.node"]}

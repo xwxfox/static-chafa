@@ -197,9 +197,9 @@ Chafa's source tree (39 `.c` files) is compiled verbatim into the native addon. 
 
 ```
 chafa source           vendor layer          our code
-─────────────          ────────────          ────────
+-------------          ------------          --------
 internal/*.c           vendor/chafa/         src/codec.c
-chafa-*.c   ─includes-> config.h   ─includes-> src/addon.c
+chafa-*.c   -includes-> config.h   -includes-> src/addon.c
 smolscale/*.c           glib_mini.h           src/index.ts
                         chafa_quarks.c
 ```

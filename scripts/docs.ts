@@ -5,14 +5,14 @@
  *
  * Output structure:
  *   docs/
- *   ├── index.md              - Main docs landing page
- *   ├── guide.md              - Usage guide with examples
- *   ├── api/
- *   │   ├── c.md              - C API reference (from Doxygen comments in codec.c / addon.c)
- *   │   ├── classes/          - Typedoc-generated class docs
- *   │   ├── interfaces/       - Typedoc-generated interface docs
- *   │   └── README.md         - Typedoc index
- *   └── README.md             - Symlink/copy of index.md
+ *   ├-- index.md              - Main docs landing page
+ *   ├-- guide.md              - Usage guide with examples
+ *   ├-- api/
+ *   │   ├-- c.md              - C API reference (from Doxygen comments in codec.c / addon.c)
+ *   │   ├-- classes/          - Typedoc-generated class docs
+ *   │   ├-- interfaces/       - Typedoc-generated interface docs
+ *   │   └-- README.md         - Typedoc index
+ *   └-- README.md             - Symlink/copy of index.md
  *
  * Usage: bun run docs
  */
@@ -84,7 +84,7 @@ console.log(`  ${DOCS_DIR}/guide.md       - Usage guide with examples`);
 console.log(`  ${DOCS_DIR}/api/c.md        - C API reference`);
 console.log(`  ${DOCS_DIR}/api/            - TypeScript API docs (typedoc)`);
 
-/* ── Helpers ── */
+/* -- Helpers -- */
 
 function buildIndex(): string {
     return `# static-chafa

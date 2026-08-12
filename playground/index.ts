@@ -87,7 +87,7 @@ for (let i = 0; i < staticFiles.length; i++) {
     const statsLine = `${f.name.padEnd(5)} p${pAvg.toFixed(1)} d${dAvg.toFixed(1)} b${bAvg.toFixed(1)} t${tAvg.toFixed(1)}ms -> ${(1000 / tAvg).toFixed(0)}fps`;
     Bun.write(Bun.stdout, `\x1b[${rowOff + QH};${col}H${RESET}${fit(statsLine, QW + 1)}`);
 }
-console.log(`\x1b[${3 + 2 * (QH + 3)};0H${"─".repeat(TW)}`);
+console.log(`\x1b[${3 + 2 * (QH + 3)};0H${"-".repeat(TW)}`);
 
 // ═══════════════ SECTION 2: ANIMATED (10s native speed) ═══════════════
 await waitKey("[Enter] for animated tests ->");

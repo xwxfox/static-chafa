@@ -5,9 +5,12 @@ node_modules
 out/
 dist/
 codec.so
+codec.pdb
 platforms/*/static_chafa.node
 platforms/*/static_chafa.pdb
 platforms/*/*.lib
+*.lib
+*.pdb
 deps/
 *.tgz
 

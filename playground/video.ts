@@ -18,7 +18,7 @@ function fmt(s: number) { const m = Math.floor(s / 60); return `${m}:${String(Ma
 
 let quit = false, playing = false, seekDelta = 0, toggle = false;
 
-// ── Keyboard: event listener for raw TTY input ──
+// -- Keyboard: event listener for raw TTY input --
 try {
     const stdin = process.stdin;
     stdin.setRawMode(true);

@@ -191,38 +191,38 @@ static int ff_tried = 0;
 
 static const char *SONAME_AVCODEC[]  = {
 #ifdef _WIN32
-    "avcodec-62.dll", "avcodec-61.dll", "avcodec-60.dll",
+    "avcodec-63.dll", "avcodec-62.dll", "avcodec-61.dll", "avcodec-60.dll",
     "avcodec-59.dll", "avcodec-58.dll", NULL
 #else
-    "libavcodec.so.62", "libavcodec.so.61", "libavcodec.so.60",
+    "libavcodec.so.63", "libavcodec.so.62", "libavcodec.so.61", "libavcodec.so.60",
     "libavcodec.so.59", "libavcodec.so.58", NULL
 #endif
 };
 static const char *SONAME_AVFORMAT[] = {
 #ifdef _WIN32
-    "avformat-62.dll", "avformat-61.dll", "avformat-60.dll",
+    "avformat-63.dll", "avformat-62.dll", "avformat-61.dll", "avformat-60.dll",
     "avformat-59.dll", "avformat-58.dll", NULL
 #else
-    "libavformat.so.62", "libavformat.so.61", "libavformat.so.60",
+    "libavformat.so.63", "libavformat.so.62", "libavformat.so.61", "libavformat.so.60",
     "libavformat.so.59", "libavformat.so.58", NULL
 #endif
 };
 static const char *SONAME_AVUTIL[] = {
 #ifdef _WIN32
-    "avutil-60.dll", "avutil-59.dll", "avutil-58.dll",
+    "avutil-61.dll", "avutil-60.dll", "avutil-59.dll", "avutil-58.dll",
     "avutil-57.dll", "avutil-56.dll", NULL
 #else
-    "libavutil.so.60", "libavutil.so.59", "libavutil.so.58",
+    "libavutil.so.61", "libavutil.so.60", "libavutil.so.59", "libavutil.so.58",
     "libavutil.so.57", "libavutil.so.56", NULL
 #endif
 };
 static const char *SONAME_SWSCALE[] = {
 #ifdef _WIN32
-    "swscale-8.dll", "swscale-7.dll", "swscale-6.dll",
+    "swscale-10.dll", "swscale-9.dll", "swscale-8.dll", "swscale-7.dll", "swscale-6.dll",
     "swscale-5.dll", NULL
 #else
-    "libswscale.so.8", "libswscale.so.7", "libswscale.so.6",
-    "libswscale.so.5", NULL
+    "libswscale.so.10", "libswscale.so.9", "libswscale.so.8", "libswscale.so.7",
+    "libswscale.so.6", "libswscale.so.5", NULL
 #endif
 };
 
@@ -262,6 +262,7 @@ static int ff_init(void)
     LOAD(avcodec, avcodec_free_context);
     LOAD(avcodec, avcodec_flush_buffers);
     LOAD(avcodec, avcodec_get_name);
+    LOAD(avcodec, av_packet_unref);
 
     LOAD(avformat, avformat_open_input);
     LOAD(avformat, avformat_close_input);
@@ -270,10 +271,8 @@ static int ff_init(void)
     LOAD(avformat, av_read_frame);
     LOAD(avformat, av_seek_frame);
     LOAD(avformat, avformat_seek_file);
-    LOAD(avformat, av_packet_unref);
 
     LOAD(avutil, av_frame_alloc);
-    LOAD(avutil, av_frame_unref);
     LOAD(avutil, av_frame_unref);
     LOAD(avutil, av_frame_free);
     LOAD(avutil, av_malloc);        /* ff.av_malloc */
@@ -301,9 +300,19 @@ fail:
     if (ff.avutil)   { dlclose(ff.avutil);   ff.avutil   = NULL; }
     if (ff.swscale)  { dlclose(ff.swscale);  ff.swscale  = NULL; }
     ff.ok = 0;
-    if (ff.error_msg[0] == 0)
+    if (ff.error_msg[0] == 0) {
+#ifdef _WIN32
+        snprintf(ff.error_msg, sizeof(ff.error_msg),
+            "FFmpeg shared DLLs not found (avcodec-*.dll, avformat-*.dll, avutil-*.dll, "
+            "swscale-*.dll must be on PATH). You need a SHARED FFmpeg build - the static "
+            "ffmpeg.exe builds (e.g. gyan.dev 'full_build') ship no DLLs and cannot be used. "
+            "Download e.g. ffmpeg-master-latest-win64-gpl-shared.zip from "
+            "https://github.com/BtbN/FFmpeg-Builds/releases and add its bin\\ directory to PATH.");
+#else
         snprintf(ff.error_msg, sizeof(ff.error_msg),
             "FFmpeg libraries not found. Install: sudo apt install libavcodec62 libavformat62 libavutil60 libswscale8");
+#endif
+    }
     return 0;
 }
 
@@ -700,12 +709,12 @@ CODEC_EXPORT void codec_video_close(CodecCtx *ctx, int32_t handle)
     codec_ctx_set_video_handle(ctx, handle, NULL);
 }
 
-const char *codec_video_error(void)
+CODEC_EXPORT const char *codec_video_error(void)
 {
     return ff.error_msg[0] ? ff.error_msg : "Unknown error";
 }
 
-/* ── VideoStatus struct and query ── */
+/* -- VideoStatus struct and query -- */
 
 static double wall_ms(void);
 
@@ -757,7 +766,7 @@ CODEC_EXPORT int32_t codec_video_status(CodecCtx *ctx, int32_t handle, VideoStat
     return 0;
 }
 
-/* ── Wallclock helpers ── */
+/* -- Wallclock helpers -- */
 
 static double wall_ms(void)
 {
@@ -766,7 +775,7 @@ static double wall_ms(void)
     return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
 }
 
-/* ── Playback control ── */
+/* -- Playback control -- */
 
 CODEC_EXPORT void codec_video_play(CodecCtx *ctx, int32_t handle, double speed)
 {
@@ -790,7 +799,7 @@ CODEC_EXPORT void codec_video_pause(CodecCtx *ctx, int32_t handle)
     vh->playing = 0;
 }
 
-/* ── Seek with guard against rapid re-entry ── */
+/* -- Seek with guard against rapid re-entry -- */
 
 CODEC_EXPORT int32_t codec_video_seek(CodecCtx *ctx, int32_t handle, double target_sec)
 {

@@ -177,7 +177,7 @@ typedef struct
     int32_t format, canvas_mode, pixel_mode, have_alpha;
 } CodecMetrics;
 
-/* ── decode helpers ── */
+/* -- decode helpers -- */
 static double now_ms(void)
 {
     struct timespec ts;
@@ -186,7 +186,7 @@ static double now_ms(void)
 }
 static int32_t abs_i32(int32_t x) { return x < 0 ? -x : x; }
 
-/* ── format detection ── */
+/* -- format detection -- */
 #define FMT_PNG  0
 #define FMT_JPEG 1
 #define FMT_BMP  2
@@ -209,7 +209,7 @@ static int detect_format(const uint8_t *data, int32_t len)
     return -1;
 }
 
-/* ── PNG decode (libpng simplified API) ── */
+/* -- PNG decode (libpng simplified API) -- */
 static int decode_png(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf, int32_t len)
 {
     png_image img;
@@ -232,7 +232,7 @@ static int decode_png(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf,
     return 0;
 }
 
-/* ── JPEG decode ── */
+/* -- JPEG decode -- */
 typedef struct
 {
     struct jpeg_source_mgr pub;
@@ -323,7 +323,7 @@ static int decode_jpeg(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf
     return 0;
 }
 
-/* ── BMP decode ── */
+/* -- BMP decode -- */
 static int decode_bmp(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf, int32_t len)
 {
     if (len < 30 || buf[0] != 'B' || buf[1] != 'M')
@@ -355,7 +355,7 @@ static int decode_bmp(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf,
     return 0;
 }
 
-/* ── WebP static decode ── */
+/* -- WebP static decode -- */
 static int decode_webp_static(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf, int32_t len)
 {
     int w, h;
@@ -374,7 +374,7 @@ static int decode_webp_static(uint8_t **out, int *out_w, int *out_h, const uint8
     return 0;
 }
 
-/* ── GIF decode (stb_image, returns concatenated frames for animation) ── */
+/* -- GIF decode (stb_image, returns concatenated frames for animation) -- */
 static int decode_gif(uint8_t **out, int *out_w, int *out_h, int *out_frames,
                       const uint8_t *buf, int32_t len)
 {
@@ -390,7 +390,7 @@ static int decode_gif(uint8_t **out, int *out_w, int *out_h, int *out_frames,
     return 0;
 }
 
-/* ── Default config ── */
+/* -- Default config -- */
 /* Perf: work_factor=0.0 is fastest; chafa CLI defaults to 0.5 for better quality.
    preprocessing=0 skips auto-contrast; chafa CLI defaults to on. */
 static void config_init(CodecConfig *cfg)
@@ -552,7 +552,7 @@ CODEC_EXPORT void codec_video_close(CodecCtx *ctx, int32_t handle);
 CODEC_EXPORT const char *codec_video_error(void);
 /** @} */
 
-/* ── internal helpers ── */
+/* -- internal helpers -- */
 
 static ChafaCanvasConfig *make_canvas_config(const CodecConfig *cfg)
 {
@@ -702,7 +702,7 @@ static char *canvas_build_matrix(ChafaCanvas *canvas, CodecMetrics *m)
     return result;
 }
 
-/* ── Decode a buffer into RGBA pixels ── */
+/* -- Decode a buffer into RGBA pixels -- */
 static uint8_t *decode_image(const uint8_t *data, int32_t len,
                              int *out_w, int *out_h, int *out_frames,
                              CodecMetrics *out)
@@ -793,7 +793,7 @@ CODEC_EXPORT void codec_ctx_configure(CodecCtx *ctx, CodecConfig *cfg)
     ctx->canvas_valid = 0;
 }
 
-/* ── decode_buffer: decode any supported format -> RGBA pixels ── */
+/* -- decode_buffer: decode any supported format -> RGBA pixels -- */
 /* Caller must free the returned buffer with codec_free() */
 CODEC_EXPORT uint8_t *codec_decode_buffer(char *data, int32_t len,
                                           int32_t *out_w, int32_t *out_h, int32_t *out_stride,
@@ -814,7 +814,7 @@ CODEC_EXPORT uint8_t *codec_decode_buffer(char *data, int32_t len,
     return rgba;
 }
 
-/* ── decode_into: decode -> caller-provided RGBA buffer (for FFI paths) ── */
+/* -- decode_into: decode -> caller-provided RGBA buffer (for FFI paths) -- */
 CODEC_EXPORT int codec_decode_into(char *data, int32_t len,
                                    uint8_t *rgba_out, int32_t rgba_cap,
                                    int32_t *out_w, int32_t *out_h, int32_t *out_stride,
@@ -851,7 +851,7 @@ CODEC_EXPORT int codec_decode_into(char *data, int32_t len,
     return ERR_OK;
 }
 
-/* ── render: decode + render -> ANSI string ── */
+/* -- render: decode + render -> ANSI string -- */
 CODEC_EXPORT char *codec_render(CodecCtx *ctx, char *data, int32_t len,
                                 CodecMetrics *out, int32_t *err)
 {
@@ -877,7 +877,7 @@ CODEC_EXPORT char *codec_render(CodecCtx *ctx, char *data, int32_t len,
     return ansi;
 }
 
-/* ── render_rgba: pre-decoded RGBA -> ANSI string ── */
+/* -- render_rgba: pre-decoded RGBA -> ANSI string -- */
 CODEC_EXPORT char *codec_render_rgba(CodecCtx *ctx, uint8_t *rgba,
                                      int32_t w, int32_t h, int32_t stride,
                                      CodecMetrics *out)
@@ -895,7 +895,7 @@ CODEC_EXPORT char *codec_render_rgba(CodecCtx *ctx, uint8_t *rgba,
     return canvas_draw_and_build(ctx->canvas, rgba, w, h, stride > 0 ? stride : w * 4, out);
 }
 
-/* ── matrix: decode + render -> JSON cell grid ── */
+/* -- matrix: decode + render -> JSON cell grid -- */
 CODEC_EXPORT char *codec_render_matrix(CodecCtx *ctx, char *data, int32_t len,
                                        CodecMetrics *out, int32_t *err)
 {
@@ -929,7 +929,7 @@ CODEC_EXPORT char *codec_render_matrix(CodecCtx *ctx, char *data, int32_t len,
     return json ? json : strdup("[]");
 }
 
-/* ── render_matrix_rgba: pre-decoded RGBA -> JSON cell grid ── */
+/* -- render_matrix_rgba: pre-decoded RGBA -> JSON cell grid -- */
 CODEC_EXPORT char *codec_render_matrix_rgba(CodecCtx *ctx, uint8_t *rgba,
                                             int32_t w, int32_t h, int32_t stride,
                                             CodecMetrics *out)

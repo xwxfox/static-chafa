@@ -32,13 +32,12 @@ const lib = dlopen("codec.so", {
     codec_video_info: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
     codec_video_seek: { args: [FFIType.ptr, FFIType.i32, FFIType.f64], returns: FFIType.i32 },
     codec_video_close: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.void },
-    codec_video_seek: { args: [FFIType.ptr, FFIType.i32, FFIType.f64], returns: FFIType.i32 },
     codec_video_status: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
     codec_video_error: { args: [], returns: FFIType.cstring },
 });
 const s = lib.symbols;
 
-/* ── CodecConfig layout (must match codec.c byte-for-byte) ──
+/* -- CodecConfig layout (must match codec.c byte-for-byte) --
    Layout: 22 fields (int32/float) + 2 × 128 byte char buffers
    Fields in order:
      i[0]  term_w          f[4]  work_factor      f[16] dither_intensity

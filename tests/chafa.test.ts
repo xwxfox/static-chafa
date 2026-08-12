@@ -18,7 +18,7 @@ import Chafa, {
 } from "../src/index.ts";
 import fs from "node:fs";
 
-/* ── Test media ── */
+/* -- Test media -- */
 const MEDIA = "playground/media";
 let pngBuf: Buffer;
 let jpgBuf: Buffer;

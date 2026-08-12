@@ -129,7 +129,7 @@ async function main() {
     const passed = results.filter(r => r.passed).length;
     const failed = results.length - passed;
 
-    console.log("\n" + "─".repeat(70));
+    console.log("\n" + "-".repeat(70));
     console.log(`Results: ${passed}/${results.length} passed` + (failed > 0 ? `, ${failed} failed` : ""));
     if (failed > 0) process.exitCode = 1;
 }

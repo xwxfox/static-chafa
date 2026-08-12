@@ -60,7 +60,7 @@ export {
     defaultConfig,
 } from "./types.ts";
 
-/* ── helpers ── */
+/* -- helpers -- */
 function ensureBuffer(data: Uint8Array): Buffer {
     if (Buffer.isBuffer(data)) return data as Buffer;
     return Buffer.from(data);

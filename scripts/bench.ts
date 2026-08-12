@@ -34,7 +34,7 @@ const MODES = [
     { name: "indexed16", canvasMode: CanvasMode.INDEXED_16, ditherMode: DitherMode.DIFFUSION },
 ];
 
-/* ── Benchmark single config ── */
+/* -- Benchmark single config -- */
 
 function benchSingle(ctx: number, buf: Uint8Array, runs: number) {
     let total = 0;
@@ -48,7 +48,7 @@ function benchSingle(ctx: number, buf: Uint8Array, runs: number) {
     return { metrics: lastMetrics, msAvg: total / runs };
 }
 
-/* ── Main ── */
+/* -- Main -- */
 
 console.log(`=== static-chafa benchmark (${RUNS} runs each) ===\n`);
 
@@ -95,7 +95,7 @@ for (const term of TERM_SIZES) {
     console.log();
 }
 
-/* ── Summary ── */
+/* -- Summary -- */
 
 console.log("=== Per-format fastest ===\n");
 for (const fmt of FORMATS) {
@@ -109,7 +109,7 @@ for (const r of results.filter((r: any) => r.termSize === "80x24" && r.mode === 
     console.log(`${r.format.padEnd(5)} parse ${r.parseMsAvg.toFixed(1)}ms  draw ${r.drawMsAvg.toFixed(1)}ms  build ${r.buildMsAvg.toFixed(1)}ms  rgba ${(r.rgbaBytes / 1024).toFixed(0)}KB`);
 }
 
-/* ── JSON output for CI ── */
+/* -- JSON output for CI -- */
 if (process.argv.includes("--json")) {
     console.log("\n--- BENCH_JSON ---");
     console.log(JSON.stringify(results, null, 2));

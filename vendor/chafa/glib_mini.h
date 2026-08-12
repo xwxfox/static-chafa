@@ -32,7 +32,7 @@
 #define sched_yield() Sleep(0)
 #endif
 
-/* ── Basic types ── */
+/* -- Basic types -- */
 typedef int                gint;
 typedef unsigned int       guint;
 typedef uint8_t            guint8;
@@ -68,7 +68,7 @@ typedef uint16_t           gushort;
 #define G_BEGIN_DECLS
 #define G_END_DECLS
 
-/* ── Compiler attributes ── */
+/* -- Compiler attributes -- */
 #define G_GNUC_UNUSED               __attribute__((unused))
 #define G_GNUC_PURE                 __attribute__((pure))
 #define G_GNUC_CONST                __attribute__((const))
@@ -78,7 +78,7 @@ typedef uint16_t           gushort;
 #define G_GNUC_MALLOC               __attribute__((malloc))
 #define G_GNUC_INTERNAL             __attribute__((visibility("hidden")))
 
-/* ── Math macros ── */
+/* -- Math macros -- */
 #ifndef MAX
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 #endif
@@ -94,13 +94,13 @@ typedef uint16_t           gushort;
 #define G_STMT_END   while(0)
 #define G_N_ELEMENTS(arr) (sizeof(arr) / sizeof((arr)[0]))
 
-/* ── Conversions ── */
+/* -- Conversions -- */
 #define GINT_TO_POINTER(i)  ((gpointer)(guintptr)(i))
 #define GPOINTER_TO_INT(p)  ((gint)(gintptr)(p))
 #define GUINT_TO_POINTER(u) ((gpointer)(guintptr)(u))
 #define GPOINTER_TO_UINT(p) ((guint)(guintptr)(p))
 
-/* ── Limits ── */
+/* -- Limits -- */
 #define G_MININT     INT_MIN
 #define G_MAXINT     INT_MAX
 #define G_MAXINT64   INT64_MAX
@@ -114,7 +114,7 @@ typedef uint16_t           gushort;
 #define G_MININT16   INT16_MIN
 #define G_MAXFLOAT   FLT_MAX
 
-/* ── Endian byte swap macros ── */
+/* -- Endian byte swap macros -- */
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
   #define GUINT32_FROM_BE(x) __builtin_bswap32(x)
   #define GUINT32_TO_LE(x)   (x)
@@ -125,16 +125,16 @@ typedef uint16_t           gushort;
   #define GUINT16_TO_LE(x)   __builtin_bswap16(x)
 #endif
 
-/* ── g_once ── */
+/* -- g_once -- */
 #define g_once(once, func, arg) g_once_impl((GOnce*)(once), (gpointer(*)(gpointer))(func), (gpointer)(arg))
 
-/* ── GLib version macros ── */
+/* -- GLib version macros -- */
 #define G_ENCODE_VERSION(major, minor)  (((major) << 16) | ((minor) & 0xffff))
 #define G_DEPRECATED              __attribute__((deprecated))
 #define G_DEPRECATED_FOR(f)       __attribute__((deprecated("Use " #f)))
 #define G_UNAVAILABLE(major,minor)
 
-/* ── Memory ── */
+/* -- Memory -- */
 #define g_new(type, count)       ((type*)malloc(sizeof(type) * (size_t)(count)))
 #define g_new0(type, count)      ((type*)calloc((size_t)(count), sizeof(type)))
 #define g_try_new(type, count)   ((type*)malloc(sizeof(type) * (size_t)(count)))
@@ -167,7 +167,7 @@ static gchar* g_strndup(const gchar *s, gsize n) {
 }
 static gpointer g_memdup(gconstpointer m, guint sz) { if(!m) return NULL; void *p=malloc(sz); if(p) memcpy(p,m,sz); return p; }
 
-/* ── Atomic operations ── */
+/* -- Atomic operations -- */
 #define g_atomic_int_get(p)     atomic_load((_Atomic int*)(p))
 #define g_atomic_int_set(p, v)  atomic_store((_Atomic int*)(p), (v))
 #define g_atomic_int_inc(p)     (atomic_fetch_add((_Atomic int*)(p), 1))
@@ -176,7 +176,7 @@ static gpointer g_memdup(gconstpointer m, guint sz) { if(!m) return NULL; void *
 #define g_atomic_pointer_get(p)      atomic_load((_Atomic void**)(p))
 #define g_atomic_pointer_set(p, v)   atomic_store((_Atomic void**)(p), (v))
 
-/* ── g_snprintf ── */
+/* -- g_snprintf -- */
 static inline gint g_snprintf(gchar *s, gulong n, const gchar *fmt, ...) {
     va_list ap; va_start(ap, fmt); gint r = vsnprintf(s, n, fmt, ap); va_end(ap); return r;
 }
@@ -187,7 +187,7 @@ static inline gint g_vasprintf(gchar **s, const gchar *fmt, va_list ap) {
     return vsnprintf(*s, (gsize)n+1, fmt, ap);
 }
 
-/* ── GString (dynamic string) ── */
+/* -- GString (dynamic string) -- */
 typedef struct { gchar *str; gsize len; gsize allocated_len; } GString;
 
 static inline GString* g_string_new(const gchar *init) {
@@ -288,14 +288,14 @@ static inline void g_string_append_printf(GString *gs, const gchar *fmt, ...) {
     gs->len += (gsize)n;
 }
 
-/* ── strdup_printf ── */
+/* -- strdup_printf -- */
 static inline gchar* g_strdup_printf(const gchar *fmt, ...) {
     va_list ap; va_start(ap, fmt); gint n = vsnprintf(NULL,0,fmt,ap); va_end(ap);
     if(n<0) return NULL; gchar *s=malloc((gsize)n+1); if(!s) return NULL;
     va_start(ap, fmt); vsnprintf(s,(gsize)n+1,fmt,ap); va_end(ap); return s;
 }
 
-/* ── g_strconcat ── */
+/* -- g_strconcat -- */
 static inline gchar* g_strconcat(const gchar *s1, ...) {
     va_list ap; const gchar *s; gsize len=0;
     va_start(ap,s1); s=s1; while(s){len+=strlen(s);s=va_arg(ap,const gchar*);} va_end(ap);
@@ -304,7 +304,7 @@ static inline gchar* g_strconcat(const gchar *s1, ...) {
     *p='\0'; return r;
 }
 
-/* ── g_strjoin ── */
+/* -- g_strjoin -- */
 static inline gchar* g_strjoin(const gchar *sep, ...) {
     va_list ap; const gchar *s; gsize total=0, n=0, seplen=sep?strlen(sep):0;
     va_start(ap,sep); while((s=va_arg(ap,const gchar*))){total+=strlen(s);n++;} va_end(ap);
@@ -315,7 +315,7 @@ static inline gchar* g_strjoin(const gchar *sep, ...) {
     va_end(ap); *p='\0'; return r;
 }
 
-/* ── g_strsplit ── */
+/* -- g_strsplit -- */
 static inline gchar** g_strsplit(const gchar *s, const gchar *delim, gint max) {
     if(!s || !delim) { gchar **r=malloc(sizeof(gchar*)); r[0]=NULL; return r; }
     gsize dlen=strlen(delim); if(dlen==0) { gchar **r=malloc(2*sizeof(gchar*)); r[0]=g_strdup(s); r[1]=NULL; return r; }
@@ -331,7 +331,7 @@ static inline gchar** g_strsplit(const gchar *s, const gchar *delim, gint max) {
 }
 static inline void g_strfreev(gchar **v) { if(v){for(gint i=0;v[i];i++) free(v[i]); free(v);} }
 
-/* ── ASCII/unicode string utils ── */
+/* -- ASCII/unicode string utils -- */
 static inline gint g_ascii_strcasecmp(const gchar *a, const gchar *b) {
     while(*a && *b) { gint ca=(guchar)*a, cb=(guchar)*b;
         if(ca>='A'&&ca<='Z')ca+='a'-'A'; if(cb>='A'&&cb<='Z')cb+='a'-'A';
@@ -348,7 +348,7 @@ static inline gint g_ascii_strncasecmp(const gchar *a, const gchar *b, gsize n) 
 static inline gunichar g_ascii_tolower(gunichar c) { return (c>='A'&&c<='Z')?c-'A'+'a':c; }
 static inline gunichar g_ascii_toupper(gunichar c) { return (c>='a'&&c<='z')?c-'a'+'A':c; }
 
-/* ── Unicode ── */
+/* -- Unicode -- */
 static inline gboolean g_unichar_isprint(gunichar c) { return c >= 0x20 && c != 0x7f; }
 static inline gboolean g_unichar_iszerowidth(gunichar c) {
     return (c>=0x0300&&c<=0x036f)||(c>=0x0483&&c<=0x0489)||(c>=0x0591&&c<=0x05bd)||
@@ -412,7 +412,7 @@ static const guint8 _g_utf8_skip_data[256] = {
 };
 #define g_utf8_skip (_g_utf8_skip_data)
 
-/* ── Simple hash table ── */
+/* -- Simple hash table -- */
 typedef guint (*GHashFunc)(gconstpointer);
 typedef gboolean (*GEqualFunc)(gconstpointer, gconstpointer);
 typedef void (*GDestroyNotify)(gpointer);
@@ -482,7 +482,7 @@ static inline gboolean g_hash_table_iter_next(GHashTableIter *it, gpointer *key,
     return TRUE;
 }
 
-/* ── Simple dynamic array ── */
+/* -- Simple dynamic array -- */
 typedef struct { gchar *data; gsize len, alloc, elt_size; gboolean zero_term, clear; } GArray;
 static inline GArray* g_array_new(gboolean zt, gboolean cl, guint es) {
     GArray *a=calloc(1,sizeof(GArray)); if(!a) return NULL; a->elt_size=es; a->zero_term=zt; a->clear=cl; return a;
@@ -504,7 +504,7 @@ static inline gchar* g_array_free(GArray *a, gboolean free_seg) {
     if(!a) return NULL; gchar *d=free_seg?NULL:a->data; if(free_seg) free(a->data); free(a); return d;
 }
 
-/* ── Simple queue ── */
+/* -- Simple queue -- */
 typedef struct _GQNode { struct _GQNode *next, *prev; gpointer data; } GQNode;
 typedef struct { GQNode *head, *tail; guint length; } GQueue;
 static inline GQueue* g_queue_new(void) { return calloc(1,sizeof(GQueue)); }
@@ -522,7 +522,7 @@ static inline void g_queue_free_full(GQueue *q, GDestroyNotify fn) {
     while(n){GQNode *nx=n->next; if(fn)fn(n->data); free(n); n=nx;} free(q);
 }
 
-/* ── Threading (minimal, pthread on POSIX, Win32 API on Windows) ── */
+/* -- Threading (minimal, pthread on POSIX, Win32 API on Windows) -- */
 #ifdef _WIN32
 typedef CRITICAL_SECTION GMutex;
 typedef CONDITION_VARIABLE GCond;
@@ -584,7 +584,7 @@ static inline void g_thread_join(gpointer thread) {
 #define g_thread_self() ((void*)(guintptr)pthread_self())
 #endif
 
-/* ── GError (forward declared for thread pool) ── */
+/* -- GError (forward declared for thread pool) -- */
 typedef struct { guint domain; gint code; gchar *message; } GError;
 
 /* Thread pool (simplified - single-threaded mode only) */
@@ -603,7 +603,7 @@ static inline void g_thread_pool_free(GThreadPool *p, gboolean imm, gboolean wai
     g_queue_free_full(p->q, g_free); g_mutex_clear(&p->m); g_cond_clear(&p->c); free(p);
 }
 
-/* ── GOnce ── */
+/* -- GOnce -- */
 typedef struct { volatile int status; gpointer retval; } GOnce;
 #define G_ONCE_INIT {0, NULL}
 static inline gboolean g_once_init_enter(volatile void *loc) {
@@ -618,7 +618,7 @@ static inline void g_once_init_leave(volatile void *loc, gsize result) {
     atomic_store((_Atomic int*)&o->status, 2);
 }
 
-/* ── Assertions ── */
+/* -- Assertions -- */
 #define g_assert(expr) do{if(!(expr)){fprintf(stderr,"ASSERT %s:%d: %s\n",__FILE__,__LINE__,#expr);abort();}}while(0)
 #define g_assert_not_reached() do{fprintf(stderr,"ASSERT_NOT_REACHED %s:%d\n",__FILE__,__LINE__);abort();}while(0)
 #define g_assert_true(expr) g_assert(expr)
@@ -629,7 +629,7 @@ static inline void g_return_if_fail_warning(const gchar *l, const gchar *f, cons
 #define g_return_val_if_fail(expr,v) do{if(!(expr)){g_return_if_fail_warning(G_STRFUNC,__FILE__,#expr);return(v);}}while(0)
 #define G_STRFUNC __func__
 
-/* ── Logging ── */
+/* -- Logging -- */
 typedef enum { G_LOG_LEVEL_ERROR=4, G_LOG_LEVEL_CRITICAL=8, G_LOG_LEVEL_WARNING=16,
     G_LOG_LEVEL_MESSAGE=32, G_LOG_LEVEL_INFO=64, G_LOG_LEVEL_DEBUG=128 } GLogLevelFlags;
 static inline void g_log(const gchar *dom, GLogLevelFlags lvl, const gchar *fmt, ...) {
@@ -643,7 +643,7 @@ static inline void g_assertion_message_expr(const gchar *dom, const gchar *file,
     fprintf(stderr, "ASSERTION FAILED: %s:%d:%s: %s\n", file, line, func, expr); abort();
 }
 
-/* ── GError functions ── */
+/* -- GError functions -- */
 static inline void g_set_error(GError **err, guint d, gint c, const gchar *fmt, ...) {
     (void)err;(void)d;(void)c;(void)fmt;
 }
@@ -655,11 +655,11 @@ static inline void g_set_error(GError **err, guint d, gint c, const gchar *fmt, 
 #define G_OPTION_ERROR_BAD_VALUE 1
 #define G_OPTION_ERROR_FAILED 2
 
-/* ── Quark ── */
+/* -- Quark -- */
 static inline GQuark g_quark_from_static_string(const gchar *s) { (void)s; return 1; }
 static inline GQuark g_quark_from_string(const gchar *s) { (void)s; return 1; }
 
-/* ── Time ── */
+/* -- Time -- */
 static inline gint64 g_get_monotonic_time(void) {
 #ifdef _WIN32
     LARGE_INTEGER freq, cnt;
@@ -673,7 +673,7 @@ static inline gint64 g_get_monotonic_time(void) {
 }
 static inline guint g_get_num_processors(void) { return 1; }
 
-/* ── Environment ── */
+/* -- Environment -- */
 static inline const gchar* g_environ_getenv(gchar **envp, const gchar *name) {
     if(!envp||!name) return NULL; gsize nl=strlen(name);
     for(gint i=0; envp[i]; i++) { if(!strncmp(envp[i],name,nl) && envp[i][nl]=='=') return envp[i]+nl+1; }
@@ -685,14 +685,14 @@ static inline gchar** g_get_environ(void) { return NULL; }
 static inline gchar** g_get_environ(void) { extern char **environ; return environ; }
 #endif
 
-/* ── g_once_impl ── */
+/* -- g_once_impl -- */
 static inline gpointer g_once_impl(GOnce *once, void*(*func)(gpointer), gpointer arg) {
     if(atomic_load((_Atomic int*)&once->status)==2) return once->retval;
     if(g_once_init_enter(once)) { gpointer r=func(arg); g_once_init_leave(once,(gsize)r); return r; }
     return once->retval;
 }
 
-/* ── Types needed by chafa but not in original section ── */
+/* -- Types needed by chafa but not in original section -- */
 typedef struct { gint fd; gushort events, revents; } GPollFD;
 #define G_IO_IN  1
 #define G_IO_OUT 4
@@ -703,7 +703,7 @@ typedef struct { gint fd; gushort events, revents; } GPollFD;
 typedef gboolean (*GSourceFunc)(gpointer);
 typedef void* (*GThreadFunc)(gpointer);
 
-/* ── Poll ── */
+/* -- Poll -- */
 static inline gint g_poll(GPollFD *fds, guint n, gint timeout) {
 #ifdef _WIN32
     (void)fds;(void)n;(void)timeout; return 0;
@@ -720,7 +720,7 @@ static inline gint g_poll(GPollFD *fds, guint n, gint timeout) {
 #endif
 }
 
-/* ── Unix ── */
+/* -- Unix -- */
 static inline gint g_unix_open_pipe(gint *fds, gint flags, GError **err) {
     (void)err;(void)flags;
 #ifndef _WIN32
@@ -737,18 +737,18 @@ static inline gboolean g_unix_set_fd_nonblocking(gint fd, gboolean nb, GError **
     return TRUE;
 }
 
-/* ── Event loop stubs ── */
+/* -- Event loop stubs -- */
 static inline guint g_idle_add(gboolean(*fn)(gpointer), gpointer d) { (void)fn;(void)d; return 0; }
 static inline gboolean g_source_remove(guint tag) { (void)tag; return TRUE; }
 
-/* ── Win32 helpers ── */
+/* -- Win32 helpers -- */
 #ifdef _WIN32
 static inline gchar* g_win32_error_message(guint32 err) {
     (void)err; return g_strdup("Unknown error");
 }
 #endif
 
-/* ── GPid ── */
+/* -- GPid -- */
 #ifdef _WIN32
 typedef void* GPid;
 #else
