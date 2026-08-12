@@ -1,6 +1,6 @@
 # Class: ChafaAnimation
 
-Defined in: [index.ts:139](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L139)
+Defined in: [index.ts:140](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L140)
 
 Plays animated GIF or WebP images frame-by-frame.
 
@@ -30,7 +30,7 @@ new ChafaAnimation(
    metrics): ChafaAnimation;
 ```
 
-Defined in: [index.ts:153](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L153)
+Defined in: [index.ts:154](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L154)
 
 #### Parameters
 
@@ -48,10 +48,10 @@ Defined in: [index.ts:153](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56
 
 | Property | Modifier | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="framecount"></a> `frameCount` | `readonly` | `number` | Total frames in the animation (-1 for unknown-length WebP). | [index.ts:145](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L145) |
-| <a id="height"></a> `height` | `readonly` | `number` | Source image height in pixels. | [index.ts:149](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L149) |
-| <a id="imageformat"></a> `imageFormat` | `readonly` | `number` | Image format (3=GIF, 4=WebP). | [index.ts:151](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L151) |
-| <a id="width"></a> `width` | `readonly` | `number` | Source image width in pixels. | [index.ts:147](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L147) |
+| <a id="framecount"></a> `frameCount` | `readonly` | `number` | Total frames in the animation (-1 for unknown-length WebP). | [index.ts:146](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L146) |
+| <a id="height"></a> `height` | `readonly` | `number` | Source image height in pixels. | [index.ts:150](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L150) |
+| <a id="imageformat"></a> `imageFormat` | `readonly` | `number` | Image format (3=GIF, 4=WebP). | [index.ts:152](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L152) |
+| <a id="width"></a> `width` | `readonly` | `number` | Source image width in pixels. | [index.ts:148](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L148) |
 
 ## Methods
 
@@ -61,7 +61,7 @@ Defined in: [index.ts:153](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56
 dispose: void;
 ```
 
-Defined in: [index.ts:200](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L200)
+Defined in: [index.ts:201](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L201)
 
 #### Returns
 
@@ -77,7 +77,7 @@ Defined in: [index.ts:200](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56
 abort(): void;
 ```
 
-Defined in: [index.ts:194](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L194)
+Defined in: [index.ts:195](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L195)
 
 Signal early termination (stops async decoders). Does not free resources.
 
@@ -93,7 +93,7 @@ Signal early termination (stops async decoders). Does not free resources.
 close(): void;
 ```
 
-Defined in: [index.ts:187](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L187)
+Defined in: [index.ts:188](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L188)
 
 Close the animation and free native resources.
 
@@ -109,7 +109,7 @@ Close the animation and free native resources.
 next(): AnimFrame | null;
 ```
 
-Defined in: [index.ts:166](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L166)
+Defined in: [index.ts:167](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L167)
 
 Advance to the next frame.
 
@@ -127,7 +127,7 @@ Frame info or `null` when playback ends.
 renderFrame(frameIndex): RenderResult;
 ```
 
-Defined in: [index.ts:175](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L175)
+Defined in: [index.ts:176](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L176)
 
 Render a specific frame to ANSI terminal art.
 
@@ -149,7 +149,7 @@ Render a specific frame to ANSI terminal art.
 rewind(): void;
 ```
 
-Defined in: [index.ts:181](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L181)
+Defined in: [index.ts:182](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L182)
 
 Rewind playback to the first frame.
 

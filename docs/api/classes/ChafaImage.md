@@ -1,6 +1,6 @@
 # Class: ChafaImage
 
-Defined in: [index.ts:80](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L80)
+Defined in: [index.ts:81](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L81)
 
 Holds a decoded image's raw RGBA pixel data.
 
@@ -17,7 +17,7 @@ Supports `using` for automatic cleanup.
 new ChafaImage(data): ChafaImage;
 ```
 
-Defined in: [index.ts:92](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L92)
+Defined in: [index.ts:93](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L93)
 
 #### Parameters
 
@@ -33,11 +33,11 @@ Defined in: [index.ts:92](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b569
 
 | Property | Modifier | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ | ------ |
-| <a id="height"></a> `height` | `readonly` | `number` | Image height in pixels. | [index.ts:86](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L86) |
-| <a id="metrics"></a> `metrics` | `readonly` | [`CodecMetrics`](../interfaces/CodecMetrics) | Decode metrics (format, decode time, etc.). | [index.ts:90](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L90) |
-| <a id="rgba"></a> `rgba` | `readonly` | `Uint8Array` | RGBA pixel buffer (8 bits per channel, unassociated alpha). Read-only for safety. | [index.ts:82](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L82) |
-| <a id="stride"></a> `stride` | `readonly` | `number` | Row stride in bytes (always `width * 4`). | [index.ts:88](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L88) |
-| <a id="width"></a> `width` | `readonly` | `number` | Image width in pixels. | [index.ts:84](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L84) |
+| <a id="height"></a> `height` | `readonly` | `number` | Image height in pixels. | [index.ts:87](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L87) |
+| <a id="metrics"></a> `metrics` | `readonly` | [`CodecMetrics`](../interfaces/CodecMetrics) | Decode metrics (format, decode time, etc.). | [index.ts:91](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L91) |
+| <a id="rgba"></a> `rgba` | `readonly` | `Uint8Array` | RGBA pixel buffer (8 bits per channel, unassociated alpha). Read-only for safety. | [index.ts:83](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L83) |
+| <a id="stride"></a> `stride` | `readonly` | `number` | Row stride in bytes (always `width * 4`). | [index.ts:89](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L89) |
+| <a id="width"></a> `width` | `readonly` | `number` | Image width in pixels. | [index.ts:85](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L85) |
 
 ## Accessors
 
@@ -49,7 +49,7 @@ Defined in: [index.ts:92](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b569
 get format(): number;
 ```
 
-Defined in: [index.ts:101](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L101)
+Defined in: [index.ts:102](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L102)
 
 Detected image format (0=PNG, 1=JPEG, 2=BMP, 3=GIF, 4=WebP).
 
@@ -65,7 +65,7 @@ Detected image format (0=PNG, 1=JPEG, 2=BMP, 3=GIF, 4=WebP).
 dispose: void;
 ```
 
-Defined in: [index.ts:112](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L112)
+Defined in: [index.ts:113](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L113)
 
 #### Returns
 
@@ -81,7 +81,7 @@ Defined in: [index.ts:112](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56
 destroy(): void;
 ```
 
-Defined in: [index.ts:107](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/index.ts#L107)
+Defined in: [index.ts:108](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/index.ts#L108)
 
 Free the native RGBA buffer.
 After calling this the image is unusable.

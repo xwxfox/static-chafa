@@ -541,6 +541,170 @@ static napi_value chafa_anim_abort(napi_env env, napi_callback_info info)
     return NULL;
 }
 
+/* ── Video extern declarations (from codec_video.c) ── */
+extern int32_t codec_video_open(CodecCtx *ctx, char *data, int32_t len,
+    int32_t decode_w, int32_t decode_h, CodecMetrics *out, int32_t *err);
+extern int32_t codec_video_next(CodecCtx *ctx, int32_t handle,
+    uint8_t *out_rgba, int32_t out_cap, int32_t *out_w, int32_t *out_h,
+    double *out_pts, CodecMetrics *out);
+extern int32_t codec_video_seek(CodecCtx *ctx, int32_t handle, double target_sec);
+extern int32_t codec_video_info(CodecCtx *ctx, int32_t handle,
+    int32_t *out_w, int32_t *out_h, double *out_duration, double *out_fps,
+    int32_t *out_has_audio, char *audio_codec, int32_t *audio_rate, int32_t *audio_ch);
+extern void codec_video_close(CodecCtx *ctx, int32_t handle);
+extern const char *codec_video_error(void);
+
+/* ── chafaVideoOpen(ctx, buffer, decodeW, decodeH) -> { handle, metrics } ── */
+static napi_value chafa_video_open(napi_env env, napi_callback_info info)
+{
+    size_t argc = 4;
+    napi_value argv[4];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+
+    void *data; size_t len;
+    if (napi_get_buffer_info(env, argv[1], &data, &len) != napi_ok)
+        { napi_throw_type_error(env, NULL, "Expected Buffer"); return NULL; }
+
+    int32_t dw = 0, dh = 0;
+    napi_get_value_int32(env, argv[2], &dw);
+    napi_get_value_int32(env, argv[3], &dh);
+
+    CodecMetrics m;
+    int32_t err = 0;
+    int32_t handle = codec_video_open(ctx, (char *)data, (int32_t)len, dw, dh, &m, &err);
+    if (handle < 0) {
+        const char *msg = codec_video_error();
+        napi_throw_error(env, NULL, msg && msg[0] ? msg : "Failed to open video");
+        return NULL;
+    }
+
+    napi_value result, val;
+    napi_create_object(env, &result);
+    napi_create_int32(env, handle, &val);
+    napi_set_named_property(env, result, "handle", val);
+    napi_set_named_property(env, result, "metrics", create_metrics(env, &m));
+    return result;
+}
+
+/* ── chafaVideoNext(ctx, handle) -> { rgba: Buffer, w, h, ptsSec, frameIndex, metrics } ── */
+static napi_value chafa_video_next(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+    int32_t handle;
+    napi_get_value_int32(env, argv[1], &handle);
+
+    /* Pre-allocate a large buffer */
+    int32_t cap = 256 * 1024 * 1024;
+    uint8_t *rgba = malloc(cap);
+    if (!rgba) { napi_throw_error(env, NULL, "malloc failed"); return NULL; }
+
+    int32_t w = 0, h = 0;
+    double pts = 0;
+    CodecMetrics m;
+    int32_t idx = codec_video_next(ctx, handle, rgba, cap, &w, &h, &pts, &m);
+    if (idx < 0) {
+        free(rgba);
+        napi_value nul; napi_get_null(env, &nul); return nul;
+    }
+
+    napi_value result, val, buf_val;
+    napi_create_object(env, &result);
+
+    size_t needed = (size_t)h * (size_t)w * 4;
+    napi_create_buffer_copy(env, needed, rgba, NULL, &buf_val);
+    napi_set_named_property(env, result, "rgba", buf_val);
+
+    napi_create_int32(env, w, &val);
+    napi_set_named_property(env, result, "width", val);
+    napi_create_int32(env, h, &val);
+    napi_set_named_property(env, result, "height", val);
+    napi_create_double(env, pts, &val);
+    napi_set_named_property(env, result, "ptsSec", val);
+    napi_create_int32(env, idx, &val);
+    napi_set_named_property(env, result, "frameIndex", val);
+    napi_set_named_property(env, result, "metrics", create_metrics(env, &m));
+
+    free(rgba);
+    return result;
+}
+
+/* ── chafaVideoInfo(ctx, handle) -> metadata ── */
+static napi_value chafa_video_info(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+    int32_t handle;
+    napi_get_value_int32(env, argv[1], &handle);
+
+    int32_t w = 0, h = 0, has_audio = 0, audio_rate = 0, audio_ch = 0;
+    double duration = 0, fps = 0;
+    char audio_codec[64] = {0};
+    codec_video_info(ctx, handle, &w, &h, &duration, &fps, &has_audio,
+                     audio_codec, &audio_rate, &audio_ch);
+
+    napi_value result, val;
+    napi_create_object(env, &result);
+    napi_create_int32(env, w, &val); napi_set_named_property(env, result, "width", val);
+    napi_create_int32(env, h, &val); napi_set_named_property(env, result, "height", val);
+    napi_create_double(env, duration, &val); napi_set_named_property(env, result, "durationSec", val);
+    napi_create_double(env, fps, &val); napi_set_named_property(env, result, "fps", val);
+    napi_create_int32(env, has_audio, &val); napi_set_named_property(env, result, "hasAudio", val);
+    napi_create_string_utf8(env, audio_codec, NAPI_AUTO_LENGTH, &val);
+    napi_set_named_property(env, result, "audioCodec", val);
+    napi_create_int32(env, audio_rate, &val); napi_set_named_property(env, result, "audioSampleRate", val);
+    napi_create_int32(env, audio_ch, &val); napi_set_named_property(env, result, "audioChannels", val);
+    return result;
+}
+
+/* ── chafaVideoSeek(ctx, handle, targetSec) ── */
+static napi_value chafa_video_seek(napi_env env, napi_callback_info info)
+{
+    size_t argc = 3;
+    napi_value argv[3];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+    int32_t handle;
+    double target;
+    napi_get_value_int32(env, argv[1], &handle);
+    napi_get_value_double(env, argv[2], &target);
+    codec_video_seek(ctx, handle, target);
+    return NULL;
+}
+
+/* ── chafaVideoClose(ctx, handle) ── */
+static napi_value chafa_video_close(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+    int32_t handle;
+    napi_get_value_int32(env, argv[1], &handle);
+    codec_video_close(ctx, handle);
+    return NULL;
+}
+
 /* ── chafaFree(ctx) -> void (explicit destruction) ── */
 static napi_value chafa_free(napi_env env, napi_callback_info info)
 {
@@ -576,6 +740,11 @@ napi_value Init(napi_env env, napi_value exports)
     EXPORT("chafaAnimRewind", chafa_anim_rewind);
     EXPORT("chafaAnimClose", chafa_anim_close);
     EXPORT("chafaAnimAbort", chafa_anim_abort);
+    EXPORT("chafaVideoOpen", chafa_video_open);
+    EXPORT("chafaVideoNext", chafa_video_next);
+    EXPORT("chafaVideoInfo", chafa_video_info);
+    EXPORT("chafaVideoSeek", chafa_video_seek);
+    EXPORT("chafaVideoClose", chafa_video_close);
     return exports;
 }
 

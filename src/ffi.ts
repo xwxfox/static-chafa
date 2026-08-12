@@ -12,21 +12,29 @@ const FMT_NAMES = ["PNG", "JPEG", "BMP", "GIF", "WebP"];
 export { FMT_NAMES };
 
 const lib = dlopen("codec.so", {
-    codec_ctx_new:       { args: [FFIType.ptr], returns: FFIType.ptr },
-    codec_ctx_free:      { args: [FFIType.ptr], returns: FFIType.void },
+    codec_ctx_new: { args: [FFIType.ptr], returns: FFIType.ptr },
+    codec_ctx_free: { args: [FFIType.ptr], returns: FFIType.void },
     codec_ctx_configure: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.void },
     codec_decode_into: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
-    codec_render:        { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.ptr },
-    codec_render_rgba:   { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr], returns: FFIType.ptr },
-    codec_render_matrix:  { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.ptr },
+    codec_render: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.ptr },
+    codec_render_rgba: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr], returns: FFIType.ptr },
+    codec_render_matrix: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.ptr },
     codec_render_matrix_rgba: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr], returns: FFIType.ptr },
-    codec_anim_open:      { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
-    codec_anim_next:      { args: [FFIType.ptr, FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
+    codec_anim_open: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+    codec_anim_next: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
     codec_anim_render_frame: { args: [FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.ptr], returns: FFIType.ptr },
-    codec_anim_rewind:    { args: [FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
-    codec_anim_close:     { args: [FFIType.ptr, FFIType.i32], returns: FFIType.void },
-    codec_anim_abort:     { args: [FFIType.ptr, FFIType.i32], returns: FFIType.void },
-    codec_free:           { args: [FFIType.ptr], returns: FFIType.void },
+    codec_anim_rewind: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.i32 },
+    codec_anim_close: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.void },
+    codec_anim_abort: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.void },
+    codec_free: { args: [FFIType.ptr], returns: FFIType.void },
+    codec_video_open: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+    codec_video_next: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+    codec_video_info: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+    codec_video_seek: { args: [FFIType.ptr, FFIType.i32, FFIType.f64], returns: FFIType.i32 },
+    codec_video_close: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.void },
+    codec_video_seek: { args: [FFIType.ptr, FFIType.i32, FFIType.f64], returns: FFIType.i32 },
+    codec_video_status: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
+    codec_video_error: { args: [], returns: FFIType.cstring },
 });
 const s = lib.symbols;
 
@@ -78,18 +86,18 @@ function configToNative(cfg: ChafaConfig): Uint8Array {
     const i = new Int32Array(b.buffer, b.byteOffset, CONFIG_INTS);
     const f = new Float32Array(b.buffer, b.byteOffset, CONFIG_INTS);
 
-    i[0]  = cfg.termW;          i[1]  = cfg.termH;
-    i[2]  = cfg.cellW;          i[3]  = cfg.cellH;
-    f[4]  = cfg.workFactor;
-    i[5]  = cfg.ditherMode;     i[6]  = cfg.canvasMode;
-    i[7]  = cfg.preprocessing;  i[8]  = cfg.colorExtractor;
-    i[9]  = cfg.colorSpace;     i[10] = cfg.pixelMode;
-    i[11] = cfg.bgColor;        i[12] = cfg.fgColor;
+    i[0] = cfg.termW; i[1] = cfg.termH;
+    i[2] = cfg.cellW; i[3] = cfg.cellH;
+    f[4] = cfg.workFactor;
+    i[5] = cfg.ditherMode; i[6] = cfg.canvasMode;
+    i[7] = cfg.preprocessing; i[8] = cfg.colorExtractor;
+    i[9] = cfg.colorSpace; i[10] = cfg.pixelMode;
+    i[11] = cfg.bgColor; i[12] = cfg.fgColor;
     i[13] = cfg.alphaThreshold;
-    i[14] = cfg.ditherGrainW;   i[15] = cfg.ditherGrainH;
+    i[14] = cfg.ditherGrainW; i[15] = cfg.ditherGrainH;
     f[16] = cfg.ditherIntensity;
-    i[17] = cfg.fgOnly;         i[18] = cfg.optimizations;
-    i[19] = cfg.passthrough;    i[20] = cfg.maxFrames;
+    i[17] = cfg.fgOnly; i[18] = cfg.optimizations;
+    i[19] = cfg.passthrough; i[20] = cfg.maxFrames;
     f[21] = cfg.speed;
 
     /* Write symbols string at byte offset 88, fillSymbols at 216 */
@@ -245,6 +253,40 @@ export function animRewind(ctx: number, handle: number): void {
 
 export function animClose(ctx: number, handle: number): void {
     s.codec_anim_close(ctx, handle);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Video (FFmpeg, optional - fails gracefully without FFmpeg)
+   ═══════════════════════════════════════════════════════════════════ */
+
+export function videoOpen(ctx: number, data: Uint8Array, decodeW: number, decodeH: number): { handle: number; metrics: CodecMetrics } {
+    const m = metricsBuf();
+    const eb = new Int32Array(1); eb[0] = 0;
+    const handle = s.codec_video_open(ctx, ptr(data), data.length, decodeW, decodeH, ptr(m), ptr(new Uint8Array(eb.buffer)));
+    if (handle < 0) {
+        const err = new (require("bun:ffi").CString)(s.codec_video_error()).toString();
+        throw new Error(`Failed to open video: ${err}`);
+    }
+    return { handle, metrics: metricsFromNative(m.buffer) };
+}
+
+export function videoNext(ctx: number, handle: number, rgba: Uint8Array): { frameIndex: number; w: number; h: number; ptsSec: number; metrics: CodecMetrics } | null {
+    const w = new Int32Array(1), h = new Int32Array(1);
+    const pts = new Float64Array(1);
+    const m = metricsBuf();
+    const idx = s.codec_video_next(ctx, handle, ptr(rgba), rgba.length,
+        ptr(new Uint8Array(w.buffer)), ptr(new Uint8Array(h.buffer)),
+        ptr(new Uint8Array(pts.buffer)), ptr(m));
+    if (idx < 0) return null;
+    return { frameIndex: idx, w: w[0]!, h: h[0]!, ptsSec: pts[0]!, metrics: metricsFromNative(m.buffer) };
+}
+
+export function videoSeek(ctx: number, handle: number, targetSec: number): void {
+    s.codec_video_seek(ctx, handle, targetSec);
+}
+
+export function videoClose(ctx: number, handle: number): void {
+    s.codec_video_close(ctx, handle);
 }
 
 export function animAbort(ctx: number, handle: number): void {

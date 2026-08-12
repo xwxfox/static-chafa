@@ -4,7 +4,7 @@
 function defaultConfig(): ChafaConfig;
 ```
 
-Defined in: [types.ts:270](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L270)
+Defined in: [types.ts:286](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L286)
 
 Returns a fresh default config object.
 

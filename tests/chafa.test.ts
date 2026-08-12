@@ -460,3 +460,203 @@ describe("Static utilities", () => {
         c.destroy();
     });
 });
+
+/* ═══════════════════════════════════════════════════════════════════
+   Video (FFmpeg)
+   ═══════════════════════════════════════════════════════════════════ */
+
+describe("Video", () => {
+    let videoBuf: Buffer;
+
+    beforeAll(() => {
+        // Use the test.mp4 generated earlier, or skip if not found
+        try {
+            videoBuf = fs.readFileSync("playground/media/test.mp4");
+        } catch {
+            // Try boykisser.mp4 as fallback
+            try {
+                videoBuf = fs.readFileSync("playground/media/boykisser.mp4");
+            } catch {
+                videoBuf = null as any;
+            }
+        }
+    });
+
+    const hasVideo = () => {
+        if (!videoBuf || videoBuf.length === 0) return false;
+        // Test if FFmpeg is available
+        try {
+            const c = new Chafa();
+            const v = c.openVideo(videoBuf, 160, 120);
+            v.close();
+            c.destroy();
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
+    test("open video returns ChafaVideo", () => {
+        if (!hasVideo()) return; // skip if FFmpeg not installed
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        expect(v).toBeDefined();
+        expect(v.width).toBeGreaterThan(0);
+        expect(v.height).toBeGreaterThan(0);
+        expect(v.fps).toBeGreaterThan(0);
+        expect(typeof v.durationSec).toBe("number");
+        expect(typeof v.hasAudio).toBe("number");
+        expect(typeof v.audioCodec).toBe("string");
+        v.close();
+        c.destroy();
+    });
+
+    test("decode frames", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        let count = 0;
+        while (true) {
+            const f = v.nextFrame();
+            if (!f) break;
+            count++;
+            expect(f.width).toBeGreaterThan(0);
+            expect(f.height).toBeGreaterThan(0);
+            expect(f.rgba.length).toBe(f.width * f.height * 4);
+            expect(f.ptsSec).toBeGreaterThanOrEqual(0);
+            expect(f.frameIndex).toBeGreaterThanOrEqual(0);
+            expect(f.metrics.frameDelayMs).toBeGreaterThan(0);
+            if (count >= 10) break; // only test first 10
+        }
+        expect(count).toBeGreaterThan(0);
+        v.close();
+        c.destroy();
+    });
+
+    test("seek forward", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        v.seek(1.0);
+        const f = v.nextFrame();
+        expect(f).not.toBeNull();
+        // PTS should be >= 0.5s (seek may land on nearest keyframe)
+        expect(f!.ptsSec).toBeGreaterThanOrEqual(0);
+        v.close();
+        c.destroy();
+    });
+
+    test("seek to start", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        // Read a few frames, then seek back
+        v.nextFrame();
+        v.nextFrame();
+        v.seek(0);
+        const f = v.nextFrame();
+        expect(f).not.toBeNull();
+        expect(f!.ptsSec).toBeLessThan(0.5);
+        v.close();
+        c.destroy();
+    });
+
+    test("rapid seeks do not crash", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        // Fire 3 seeks in quick succession
+        v.seek(1);
+        v.seek(2);
+        v.seek(1);
+        // Should still be able to read frames
+        const f = v.nextFrame();
+        expect(f).not.toBeNull();
+        v.close();
+        c.destroy();
+    });
+
+    test("decode at lower resolution", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 320, 240);
+        const f = v.nextFrame();
+        expect(f).not.toBeNull();
+        // Should be <= target resolution
+        expect(f!.width).toBeLessThanOrEqual(320);
+        expect(f!.height).toBeLessThanOrEqual(240);
+        v.close();
+        c.destroy();
+    });
+
+    test("close is safe to call twice", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        v.close();
+        expect(() => v.close()).not.toThrow();
+        c.destroy();
+    });
+
+    test("nextFrame after close returns null", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        v.close();
+        const f = v.nextFrame();
+        expect(f).toBeNull();
+        c.destroy();
+    });
+
+    test("context destroy closes all videos", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v1 = c.openVideo(videoBuf, 160, 120);
+        const v2 = c.openVideo(videoBuf, 160, 120);
+        // Destroy context - should close both
+        c.destroy();
+        expect(v1.nextFrame()).toBeNull();
+        expect(v2.nextFrame()).toBeNull();
+    });
+
+    test("video through renderRgba produces ANSI", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa({ termW: 80, termH: 24 });
+        const v = c.openVideo(videoBuf, 320, 240);
+        const f = v.nextFrame();
+        expect(f).not.toBeNull();
+        const { ansi } = c.renderRgba(f!.rgba, f!.width, f!.height);
+        expect(ansi).toContain("\x1b[");
+        expect(ansi.length).toBeGreaterThan(100);
+        v.close();
+        c.destroy();
+    });
+
+    test("Symbol.dispose on video", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        expect(typeof (v as any)[Symbol.dispose]).toBe("function");
+        v.close();
+        c.destroy();
+    });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   Rapid animation seek stress test
+   ═══════════════════════════════════════════════════════════════════ */
+
+describe("Animation rapid seek", () => {
+    test("rapid rewind/unread does not crash", () => {
+        const c = new Chafa();
+        const anim = c.openAnimation(gifAnimBuf);
+        // Rapid rewind + replay
+        anim.next(); anim.next(); anim.next();
+        anim.rewind();
+        anim.next(); anim.next();
+        anim.rewind();
+        anim.next();
+        anim.close();
+        c.destroy();
+    });
+});

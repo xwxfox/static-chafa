@@ -83,7 +83,7 @@ const chafa = new Chafa({
 | `renderRgba(rgba, w, h)` | `{ ansi, metrics }` | Render pre-decoded RGBA |
 | `renderMatrix(buffer)` | `{ matrix, metrics }` | Decode + render to JSON cell grid |
 | `renderMatrixRgba(rgba, w, h)` | `{ matrix, metrics }` | Render pre-decoded RGBA to cell grid |
-| `openAnimation(buffer)` | `ChafaAnimation` | Open animated GIF/WebP |
+| `openVideo(buffer, decodeW?, decodeH?)` | `ChafaVideo` | Open video file (MP4/MKV/WebM/AVI) |
 | `updateConfig(partial)` | `void` | Update config (invalidates canvas) |
 | `destroy()` | `void` | Free all native resources |
 
@@ -124,6 +124,26 @@ while (true) {
     await sleep(metrics.frameDelayMs);
 }
 anim.close();
+```
+
+### ChafaVideo
+
+Plays MP4, MKV, WebM, AVI, and any other container FFmpeg supports. Requires FFmpeg shared libraries on the system (throws a descriptive error if missing).
+
+```ts
+const video = chafa.openVideo(fs.readFileSync("clip.mp4"), 320, 240);
+// Metadata
+video.width; video.height; video.durationSec; video.fps;
+video.hasAudio; video.audioCodec; video.audioSampleRate; video.audioChannels;
+
+while (true) {
+    const frame = video.nextFrame();
+    if (!frame) break;
+    const { ansi } = chafa.renderRgba(frame.rgba, frame.width, frame.height);
+    process.stdout.write(`\x1b[H${ansi}`);
+    await sleep(frame.metrics.frameDelayMs);
+}
+video.close();
 ```
 
 ### Using `using` (TypeScript 5.2+)

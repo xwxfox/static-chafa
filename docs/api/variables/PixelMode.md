@@ -9,7 +9,7 @@ const PixelMode: {
 };
 ```
 
-Defined in: [types.ts:52](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L52)
+Defined in: [types.ts:52](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L52)
 
 Chafa pixel rendering modes.
 
@@ -22,7 +22,7 @@ Chafa pixel rendering modes.
 
 | Name | Type | Default value | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="property-iterm2"></a> `ITERM2` | `3` | `3` | [types.ts:56](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L56) |
-| <a id="property-kitty"></a> `KITTY` | `2` | `2` | [types.ts:55](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L55) |
-| <a id="property-sixels"></a> `SIXELS` | `1` | `1` | [types.ts:54](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L54) |
-| <a id="property-symbols"></a> `SYMBOLS` | `0` | `0` | [types.ts:53](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L53) |
+| <a id="property-iterm2"></a> `ITERM2` | `3` | `3` | [types.ts:56](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L56) |
+| <a id="property-kitty"></a> `KITTY` | `2` | `2` | [types.ts:55](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L55) |
+| <a id="property-sixels"></a> `SIXELS` | `1` | `1` | [types.ts:54](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L54) |
+| <a id="property-symbols"></a> `SYMBOLS` | `0` | `0` | [types.ts:53](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L53) |

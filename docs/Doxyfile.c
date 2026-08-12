@@ -1,5 +1,5 @@
 # Doxygen config for C API docs (codec.c + addon.c only)
-INPUT                  = src/codec.c src/addon.c
+INPUT                  = src/codec.c src/addon.c src/codec_video.c
 RECURSIVE              = NO
 GENERATE_HTML          = NO
 GENERATE_XML           = YES

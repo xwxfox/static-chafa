@@ -7,7 +7,7 @@ const ColorExtractor: {
 };
 ```
 
-Defined in: [types.ts:78](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L78)
+Defined in: [types.ts:78](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L78)
 
 Chafa color extraction strategies.
 
@@ -18,5 +18,5 @@ Chafa color extraction strategies.
 
 | Name | Type | Default value | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="property-average"></a> `AVERAGE` | `0` | `0` | [types.ts:79](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L79) |
-| <a id="property-median"></a> `MEDIAN` | `1` | `1` | [types.ts:80](https://github.com/xwxfox/chafa-ts-multirt/blob/d8b56995c1cfccf66d00c2bdf2426975f026db0a/src/types.ts#L80) |
+| <a id="property-average"></a> `AVERAGE` | `0` | `0` | [types.ts:79](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L79) |
+| <a id="property-median"></a> `MEDIAN` | `1` | `1` | [types.ts:80](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L80) |

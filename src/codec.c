@@ -448,6 +448,7 @@ typedef struct CodecCtx
     CodecConfig cfg;
     int canvas_valid;       /* 1 when canvas matches cfg and symbols */
     AnimHandle *handles[16];
+    void *video_handles[16]; /* VideoHandle* slots (from codec_video.c) */
 } CodecCtx;
 
 /**
@@ -523,6 +524,33 @@ CODEC_EXPORT void codec_anim_abort(CodecCtx *ctx, int32_t handle);
 
 /** Free any pointer returned by a codec_* function. Safe to call on NULL. */
 CODEC_EXPORT void codec_free(void *p);
+
+/** @name Internal helpers for codec_video.c @{ */
+CODEC_EXPORT void **codec_ctx_get_video_slots(CodecCtx *ctx) { return (void **)ctx->video_handles; }
+CODEC_EXPORT void *codec_ctx_get_video_handle(CodecCtx *ctx, int slot) {
+    if (!ctx || slot < 0 || slot >= 16) return NULL;
+    return ctx->video_handles[slot];
+}
+CODEC_EXPORT void codec_ctx_set_video_handle(CodecCtx *ctx, int slot, void *handle) {
+    if (!ctx || slot < 0 || slot >= 16) return;
+    ctx->video_handles[slot] = handle;
+}
+/** @} */
+
+/** @name Video (FFmpeg, optional - fails gracefully without FFmpeg installed) @{ */
+CODEC_EXPORT int codec_video_open_handle(CodecCtx *ctx, void *vh);
+CODEC_EXPORT int32_t codec_video_open(CodecCtx *ctx, char *data, int32_t len,
+    int32_t decode_w, int32_t decode_h, CodecMetrics *out, int32_t *err);
+CODEC_EXPORT int32_t codec_video_next(CodecCtx *ctx, int32_t handle,
+    uint8_t *out_rgba, int32_t out_cap,
+    int32_t *out_w, int32_t *out_h, double *out_pts, CodecMetrics *out);
+CODEC_EXPORT int32_t codec_video_seek(CodecCtx *ctx, int32_t handle, double target_sec);
+CODEC_EXPORT int32_t codec_video_info(CodecCtx *ctx, int32_t handle,
+    int32_t *out_w, int32_t *out_h, double *out_duration, double *out_fps,
+    int32_t *out_has_audio, char *audio_codec, int32_t *audio_rate, int32_t *audio_ch);
+CODEC_EXPORT void codec_video_close(CodecCtx *ctx, int32_t handle);
+CODEC_EXPORT const char *codec_video_error(void);
+/** @} */
 
 /* ── internal helpers ── */
 
@@ -749,6 +777,11 @@ CODEC_EXPORT void codec_ctx_free(CodecCtx *ctx)
     {
         if (ctx->handles[i])
             codec_anim_close(ctx, i);
+    }
+    for (int i = 0; i < 16; i++)
+    {
+        if (ctx->video_handles[i])
+            codec_video_close(ctx, i);
     }
     free(ctx);
 }

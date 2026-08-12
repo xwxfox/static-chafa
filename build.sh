@@ -96,7 +96,7 @@ CFLAGS="-O3 -fPIC -ffunction-sections -fdata-sections \
   -Wno-cast-qual -Wno-format-security -Wno-deprecated-declarations \
   -Wno-pointer-sign -Wno-incompatible-pointer-types"
 
-INCLUDES="-I${VENDOR} -I${CHAFA_ORIG} -I${CHAFA_ORIG}/internal -I${CHAFA_ORIG}/internal/smolscale"
+INCLUDES="-I${VENDOR} -I${SRC_DIR}/vendor/ffmpeg -I${CHAFA_ORIG} -I${CHAFA_ORIG}/internal -I${CHAFA_ORIG}/internal/smolscale"
 
 if [ "$MODE" = "napi" ]; then
     INCLUDES="${INCLUDES} -I${SRC_DIR}/src -I${SRC_DIR}/vendor/napi"
@@ -206,6 +206,10 @@ done
 # codec.c
 ${ZIG_CC} -c ${CFLAGS} -DCHAFA_COMPILATION ${INCLUDES} "${SRC_DIR}/src/codec.c" -o "${OUTDIR}/codec.o"
 OBJ_FILES="${OUTDIR}/codec.o ${OBJ_FILES}"
+
+# codec_video.c (FFmpeg - dlopen at runtime, headers vendored for all targets)
+${ZIG_CC} -c ${CFLAGS} -DCHAFA_COMPILATION ${INCLUDES} "${SRC_DIR}/src/codec_video.c" -o "${OUTDIR}/codec_video.o"
+OBJ_FILES="${OUTDIR}/codec_video.o ${OBJ_FILES}"
 
 # quarks
 ${ZIG_CC} -c ${CFLAGS} -DCHAFA_COMPILATION ${INCLUDES} "${VENDOR}/chafa_quarks.c" -o "${OUTDIR}/quarks.o"

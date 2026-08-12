@@ -47,6 +47,7 @@ export type {
     MatrixResult,
     AnimFrame,
     ChafaImageData,
+    VideoFrame,
 } from "./types.ts";
 export {
     FMT_NAMES,
@@ -194,6 +195,80 @@ export class ChafaAnimation {
     abort(): void {
         if (this.#closed) return;
         native.chafaAnimAbort(this.#ctx, this.#handle);
+    }
+
+    /** @inheritdoc */
+    [Symbol.dispose](): void {
+        this.close();
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   ChafaVideo - FFmpeg-based video playback
+   ═══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Decodes and plays MP4/MKV/WebM/AVI videos frame-by-frame via FFmpeg.
+ *
+ * Created by `chafa.openVideo(buffer)`. Requires FFmpeg shared libraries
+ * installed on the system (throws a descriptive error if not found).
+ *
+ * Videos are decoded to RGBA at a configurable target resolution and
+ * stored in an 8-frame ring buffer for smooth playback. Audio metadata
+ * is tracked but audio is not decoded (future feature).
+ */
+export class ChafaVideo {
+    #ctx: number;
+    #handle: number;
+    #closed = false;
+
+    /** Native video width in pixels. */
+    readonly width: number;
+    /** Native video height in pixels. */
+    readonly height: number;
+    /** Duration in seconds. */
+    readonly durationSec: number;
+    /** Frames per second. */
+    readonly fps: number;
+    /** Whether the video contains an audio track. */
+    readonly hasAudio: boolean;
+    /** Audio codec name (e.g. "aac", "mp3"). Empty if no audio. */
+    readonly audioCodec: string;
+    /** Audio sample rate in Hz. 0 if no audio. */
+    readonly audioSampleRate: number;
+    /** Audio channel count. 0 if no audio. */
+    readonly audioChannels: number;
+
+    constructor(ctx: number, handle: number, info: any) {
+        this.#ctx = ctx;
+        this.#handle = handle;
+        this.width = info.width;
+        this.height = info.height;
+        this.durationSec = info.durationSec;
+        this.fps = info.fps;
+        this.hasAudio = info.hasAudio;
+        this.audioCodec = info.audioCodec;
+        this.audioSampleRate = info.audioSampleRate;
+        this.audioChannels = info.audioChannels;
+    }
+
+    /** Returns the next decoded RGBA frame, or null at end of video. */
+    nextFrame(): import("./types.ts").VideoFrame | null {
+        if (this.#closed) return null;
+        return native.chafaVideoNext(this.#ctx, this.#handle);
+    }
+
+    /** Seek to the given time in seconds (nearest keyframe). */
+    seek(timeSec: number): void {
+        if (this.#closed) return;
+        native.chafaVideoSeek(this.#ctx, this.#handle, timeSec);
+    }
+
+    /** Close the video and free all resources. */
+    close(): void {
+        if (this.#closed) return;
+        this.#closed = true;
+        native.chafaVideoClose(this.#ctx, this.#handle);
     }
 
     /** @inheritdoc */
@@ -383,6 +458,26 @@ export class Chafa {
         this.#ensureAlive();
         const { handle, metrics } = native.chafaAnimOpen(this.#ctx, ensureBuffer(data));
         return new ChafaAnimation(this.#ctx, handle, metrics);
+    }
+
+    /**
+     * Open a video file (MP4, MKV, WebM, AVI, etc.) for frame-by-frame decode.
+     *
+     * Requires FFmpeg shared libraries installed on the system.
+     * Throws a descriptive error if FFmpeg is not found.
+     *
+     * @param data Video file bytes.
+     * @param decodeW Target decode width (0 = native resolution).
+     * @param decodeH Target decode height (0 = native resolution).
+     * @returns A {@link ChafaVideo} instance for frame iteration.
+     */
+    openVideo(data: Buffer | Uint8Array, decodeW?: number, decodeH?: number): ChafaVideo {
+        this.#ensureAlive();
+        const { handle, metrics } = native.chafaVideoOpen(
+            this.#ctx, ensureBuffer(data), decodeW ?? 0, decodeH ?? 0
+        );
+        const info = native.chafaVideoInfo(this.#ctx, handle);
+        return new ChafaVideo(this.#ctx, handle, info);
     }
 
     /* ════ Lifecycle ════ */

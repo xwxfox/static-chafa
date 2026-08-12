@@ -21,6 +21,7 @@ chafa.destroy();
 | [Chafa](classes/Chafa) | The main entry point for rendering images with chafa. |
 | [ChafaAnimation](classes/ChafaAnimation) | Plays animated GIF or WebP images frame-by-frame. |
 | [ChafaImage](classes/ChafaImage) | Holds a decoded image's raw RGBA pixel data. |
+| [ChafaVideo](classes/ChafaVideo) | Decodes and plays MP4/MKV/WebM/AVI videos frame-by-frame via FFmpeg. |
 
 ## Interfaces
 
@@ -32,6 +33,7 @@ chafa.destroy();
 | [CodecMetrics](interfaces/CodecMetrics) | Metrics returned with every render/decode operation. |
 | [MatrixResult](interfaces/MatrixResult) | Returned by [Chafa.renderMatrix](classes/Chafa.md#rendermatrix) and [Chafa.renderMatrixRgba](classes/Chafa.md#rendermatrixrgba). |
 | [RenderResult](interfaces/RenderResult) | Returned by [Chafa.render](classes/Chafa.md#render) and [Chafa.renderRgba](classes/Chafa.md#renderrgba). |
+| [VideoFrame](interfaces/VideoFrame) | A single decoded video frame from [ChafaVideo.nextFrame](classes/ChafaVideo.md#nextframe). |
 
 ## Type Aliases
 

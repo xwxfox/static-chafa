@@ -257,6 +257,22 @@ export interface ChafaImageData {
     metrics: CodecMetrics;
 }
 
+/** A single decoded video frame from {@link ChafaVideo.nextFrame}. */
+export interface VideoFrame {
+    /** RGBA pixel buffer (copied from the video ring buffer) */
+    rgba: Uint8Array;
+    /** Frame width in pixels (decode target, not native) */
+    width: number;
+    /** Frame height in pixels (decode target, not native) */
+    height: number;
+    /** Presentation timestamp in seconds */
+    ptsSec: number;
+    /** Frame index (0-based, monotonic within a session) */
+    frameIndex: number;
+    /** Video playback metadata (frame delay, dimensions) */
+    metrics: CodecMetrics;
+}
+
 /* ═══════════════════════════════════════════════════════════════════
    Defaults
    ═══════════════════════════════════════════════════════════════════ */
