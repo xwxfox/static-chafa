@@ -14,6 +14,8 @@
 #include <time.h>
 #include "chafa.h"
 #include <zlib.h>
+#undef HAVE_BOOLEAN
+#define HAVE_BOOLEAN
 #include <jpeglib.h>
 #include <webp/decode.h>
 #include <webp/demux.h>

@@ -21,7 +21,27 @@ for arg in "$@"; do
 done
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
-CHAFA_ORIG="/tmp/chafa_src/chafa"
+
+# If zig not in PATH, try common locations
+if ! command -v zig >/dev/null 2>&1; then
+    for d in "/c/Users/jay/zig"/*/; do
+        [ -x "$d/zig" ] && { export PATH="$d:$PATH"; break; }
+    done
+fi
+
+# ── Chafa source: env var or default to ./chafa-git ──
+CHAFA_ORIG="${CHAFA_SRC:-${SRC_DIR}/chafa-git}"
+if [ ! -d "${CHAFA_ORIG}" ]; then
+    echo "Chafa source not found at ${CHAFA_ORIG}"
+    echo "Cloning from https://github.com/hpjansson/chafa ..."
+    git clone https://github.com/hpjansson/chafa.git "${CHAFA_ORIG}" --depth 1
+    rm -rf "${CHAFA_ORIG}/.git"
+    echo "Cloned to ${CHAFA_ORIG}"
+fi
+# chafa source files live in a chafa/ subdirectory inside the repo
+if [ -d "${CHAFA_ORIG}/chafa" ]; then
+    CHAFA_ORIG="${CHAFA_ORIG}/chafa"
+fi
 DEPS_SRC="${SRC_DIR}/deps_src"
 VENDOR="${SRC_DIR}/vendor/chafa"
 export MAKEFLAGS="-j$(nproc)"
@@ -80,7 +100,7 @@ INCLUDES="-I${VENDOR} -I${CHAFA_ORIG} -I${CHAFA_ORIG}/internal -I${CHAFA_ORIG}/i
 
 if [ "$MODE" = "napi" ]; then
     INCLUDES="${INCLUDES} -I${SRC_DIR}/src -I${SRC_DIR}/vendor/napi"
-    CFLAGS="${CFLAGS} -DNAPI_VERSION=9 -DNODE_GYP_MODULE_NAME=static_chafa"
+    CFLAGS="${CFLAGS} -DBUILDING_NODE_EXTENSION -DNAPI_VERSION=9 -DNODE_GYP_MODULE_NAME=static_chafa"
 fi
 
 if ${ENABLE_POPCNT}; then
@@ -90,7 +110,7 @@ else
     echo "POPCNT: disabled"
 fi
 
-# ── Deps (cross-compile only) ──
+# ── Deps (cross-compile only, unless MSYS2 detected) ──
 build_cross_deps() {
     if [ ${CROSS} = false ]; then return 0; fi
     if [ -f "${DEPS_DIR}/lib/libz.a" ] && [ -f "${DEPS_DIR}/lib/libpng16.a" ] && \
@@ -222,6 +242,21 @@ if [ "$MODE" = "napi" ]; then
 else
     IMG_LIBS="${IMG_LIBS} -lm -lpthread"
     OUT_FILE="${SRC_DIR}/codec.so"
+fi
+
+# For Windows .node builds, generate import lib from napi.def
+# to avoid weak-undefined IAT entries that crash on Windows Insider builds
+if [ "$MODE" = "napi" ] && [ "${PLAT_PKG}" = "win32-x64" ]; then
+    echo "Generating napi import lib for Windows..."
+    NAPI_LIB_DIR="${OUTDIR}/napi_lib"
+    mkdir -p "${NAPI_LIB_DIR}"
+    if [ -f "${SRC_DIR}/napi.def" ]; then
+        dlltool -d "${SRC_DIR}/napi.def" -l "${NAPI_LIB_DIR}/libnapi.a" 2>/dev/null || true
+        if [ -f "${NAPI_LIB_DIR}/libnapi.a" ]; then
+            LINK_FLAGS="${LINK_FLAGS/-Wl,--allow-shlib-undefined/}"
+            IMG_LIBS="${IMG_LIBS} -L${NAPI_LIB_DIR} -lnapi"
+        fi
+    fi
 fi
 
 echo "Linking → ${OUT_FILE}..."
