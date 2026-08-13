@@ -544,11 +544,15 @@ CODEC_EXPORT int codec_video_open(CodecCtx *ctx, char *data, int32_t len,
         vh->fps = (double)vstr->nb_frames / vh->duration_sec;
     if (vh->fps <= 0) vh->fps = 30.0;
 
-    /* SwsContext for YUV->RGBA + optional downscale */
+    /* SwsContext for YUV->RGBA + optional downscale. FAST_BILINEAR when
+       downscaling (visually nearly identical, ~2x faster than BILINEAR),
+       BILINEAR otherwise. */
+    int sws_flags = (vh->decode_w < vh->src_w || vh->decode_h < vh->src_h)
+        ? SWS_FAST_BILINEAR : SWS_BILINEAR;
     vh->sws_ctx = ff.sws_getContext(
         vh->src_w, vh->src_h, vpar->format,
         vh->decode_w, vh->decode_h, AV_PIX_FMT_RGBA,
-        SWS_BILINEAR, NULL, NULL, NULL);
+        sws_flags, NULL, NULL, NULL);
     if (!vh->sws_ctx) goto err;
 
     vh->frame_stride = vh->decode_w * 4;

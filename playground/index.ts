@@ -54,7 +54,7 @@ const staticStats: {
     canvasW: number; canvasH: number; canvasPw: number; canvasPh: number;
     rgbaKB: number; format: number; canvasMode: number; pixelMode: number; haveAlpha: number;
 }[] = [];
-const ctx = createContext({ termW: QW, termH: QH });
+const ctx = createContext({ termW: QW, termH: QH, pixelMode: 1, pixelFit: 1  });
 render(ctx, bufs.get("playground/media/fox.png")!); // warm canvas
 
 for (let i = 0; i < staticFiles.length; i++) {
@@ -99,7 +99,7 @@ async function runAnim(name: string, buf: Uint8Array, speed: number): Promise<An
     console.log(fit(`  ${name} - native speed, 10s - term ${AW}x${AH}`, TW));
     console.log(`${"═".repeat(TW)}`);
 
-    const actx = createContext({ termW: AW, termH: AH, speed });
+    const actx = createContext({ termW: AW, termH: AH, speed, pixelMode: 1, pixelFit: 1  });
     const { handle } = animOpen(actx, buf);
 
     const renderTimes: number[] = [];
@@ -154,7 +154,7 @@ async function runMax(name: string, buf: Uint8Array): Promise<MaxResult> {
     console.log(fit(`  ${name} - max speed (10s)`, TW));
     console.log(`${"═".repeat(TW)}`);
 
-    const actx = createContext({ termW: AW, termH: AH, speed: 1e9 });
+    const actx = createContext({ termW: AW, termH: AH, speed: 1e9, pixelMode: 1 , pixelFit: 1 });
     const { handle } = animOpen(actx, buf);
 
     const first = animNext(actx, handle);

@@ -655,13 +655,17 @@ function termQueries(
         queries.forEach((q, i) => pending.set(i, q.terminator));
         let buf = Buffer.alloc(0);
         let done = false;
+        /* Preserve the caller's raw-mode state (e.g. an app with its own
+           keyboard handling running alongside the probe). */
+        let wasRaw = false;
+        try { wasRaw = !!(stdin as any).isRaw; } catch {}
 
         const finish = () => {
             if (done) return;
             done = true;
             try {
-                stdin.setRawMode?.(false);
-                stdin.pause?.();
+                stdin.setRawMode?.(wasRaw);
+                if (!wasRaw) stdin.pause?.();
             } catch {}
             stdin.off?.("data", onData);
             resolve(results);
@@ -845,6 +849,9 @@ export class Chafa {
 
     #destroyed = false;
     #lastMetrics: import("./types.ts").CodecMetrics | null = null;
+    #probed = false;
+    #rendered = false;
+    #probeReady: Promise<void> = Promise.resolve();
 
     /**
      * Create a new chafa instance.
@@ -856,11 +863,19 @@ export class Chafa {
      * a field always wins. Use {@link Chafa.detect} for a full active
      * probe of the terminal's capabilities.
      *
+     * When the terminal supports it (TTY), the constructor also starts a
+     * one-shot async probe of the real cell pixel size. Pixel modes emit
+     * images at `termW × cellW` by `termH × cellH` pixels, so without the
+     * real cell size the output can draw smaller than the terminal area.
+     * The probe patches `cellW`/`cellH` (and `termW`/`termH`) as soon as it
+     * completes - only for fields you didn't set explicitly.
+     *
      * @param config Partial config overrides.
      */
     constructor(config?: import("./types.ts").ChafaConfigPartial) {
         const auto = detectEnvDefaults();
         const user = config ?? {};
+        const explicit = new Set(Object.keys(user));
         for (const key of Object.keys(auto)) {
             if (!(key in user)) (user as any)[key] = (auto as any)[key];
         }
@@ -868,6 +883,49 @@ export class Chafa {
         const r = native.chafaCreate(this.#config);
         if (!r) throw new Error("Failed to create chafa instance");
         this.#ctx = r;
+
+        /* Pixel modes must fill the terminal's real pixel area - and env-only
+           detection misses terminals whose $TERM/$TERM_PROGRAM say nothing
+           (e.g. sixel-capable terminals). Fire the async probe whenever the
+           user left pixelMode or cellW/cellH unset; it lands well before the
+           first render in practice. Explicitly configured fields are never
+           touched, and the patch is skipped if the instance already
+           rendered/opened media (a mid-stream resize would be visible).
+           Await `probeReady` before rendering when a guaranteed first-frame
+           size/mode matters. */
+        if (
+            (!explicit.has("pixelMode") ||
+             !explicit.has("cellW") || !explicit.has("cellH")) &&
+            process.stdin.isTTY && process.stdout.isTTY
+        ) {
+            this.#probeReady = probeTerminal(300).then((info) => {
+                if (this.#destroyed || this.#probed || this.#rendered) return;
+                this.#probed = true;
+                const patch: import("./types.ts").ChafaConfigPartial = {};
+                /* Upgrade to a probed pixel protocol when the user didn't
+                   pick one and env detection found nothing. */
+                if (!explicit.has("pixelMode") &&
+                    this.#config.pixelMode === PixelMode.SYMBOLS &&
+                    info.pixelModes.length > 0) {
+                    patch.pixelMode = info.pixelModes[0]!;
+                }
+                if (!explicit.has("cellW") && info.cellW > 0) patch.cellW = info.cellW;
+                if (!explicit.has("cellH") && info.cellH > 0) patch.cellH = info.cellH;
+                if (!explicit.has("termW") && info.termW > 0) patch.termW = info.termW;
+                if (!explicit.has("termH") && info.termH > 0) patch.termH = info.termH;
+                if (Object.keys(patch).length > 0) this.updateConfig(patch);
+            }).catch(() => {});
+        }
+    }
+
+    /**
+     * Resolves once the constructor's automatic terminal probe has
+     * finished (immediately when no probe runs - non-TTY, symbol mode, or
+     * fully explicit config). Await it before opening media when pixel-mode
+     * output must be sized correctly from the very first frame.
+     */
+    get probeReady(): Promise<void> {
+        return this.#probeReady;
     }
 
     /**
@@ -927,6 +985,7 @@ export class Chafa {
      */
     render(data: Buffer | Uint8Array): import("./types.ts").RenderResult {
         this.#ensureAlive();
+        this.#rendered = true;
         const r = native.chafaRender(this.#ctx, ensureBuffer(data));
         this.#lastMetrics = r.metrics;
         return r;
@@ -944,6 +1003,7 @@ export class Chafa {
      */
     renderRgba(rgba: Uint8Array, width: number, height: number): import("./types.ts").RenderResult {
         this.#ensureAlive();
+        this.#rendered = true;
         const r = native.chafaRenderRgba(this.#ctx, ensureBuffer(rgba), width, height);
         this.#lastMetrics = r.metrics;
         return r;
@@ -962,6 +1022,7 @@ export class Chafa {
      */
     renderMatrix(data: Buffer | Uint8Array): import("./types.ts").MatrixResult {
         this.#ensureAlive();
+        this.#rendered = true;
         if (this.#config.pixelMode !== PixelMode.SYMBOLS)
             throw new Error("renderMatrix is only available in symbol mode (pixelMode: PixelMode.SYMBOLS)");
         return native.chafaRenderMatrix(this.#ctx, ensureBuffer(data));
@@ -976,6 +1037,7 @@ export class Chafa {
      */
     renderMatrixRgba(rgba: Uint8Array, width: number, height: number): import("./types.ts").MatrixResult {
         this.#ensureAlive();
+        this.#rendered = true;
         if (this.#config.pixelMode !== PixelMode.SYMBOLS)
             throw new Error("renderMatrixRgba is only available in symbol mode (pixelMode: PixelMode.SYMBOLS)");
         return native.chafaRenderMatrixRgba(this.#ctx, ensureBuffer(rgba), width, height);
@@ -1003,6 +1065,7 @@ export class Chafa {
      */
     openAnimation(data: Buffer | Uint8Array): ChafaAnimation {
         this.#ensureAlive();
+        this.#rendered = true;
         const { handle, metrics } = native.chafaAnimOpen(this.#ctx, ensureBuffer(data));
         return new ChafaAnimation(this.#ctx, handle, metrics);
     }
@@ -1035,6 +1098,7 @@ export class Chafa {
      */
     openVideo(data: Buffer | Uint8Array, decodeW?: number, decodeH?: number): ChafaVideo {
         this.#ensureAlive();
+        this.#rendered = true;
         const { handle, metrics } = native.chafaVideoOpen(
             this.#ctx, ensureBuffer(data), decodeW ?? 0, decodeH ?? 0
         );
@@ -1111,6 +1175,7 @@ export class Chafa {
      */
     async autoDetect(timeoutMs = 300): Promise<import("./types.ts").TerminalInfo> {
         const info = await probeTerminal(timeoutMs);
+        this.#probed = true;
         const patch: Partial<import("./types.ts").ChafaConfig> = {};
         if (info.pixelMode !== PixelMode.SYMBOLS && !("pixelMode" in this.#config)) {
             /* constructor may have filled pixelMode from env; only apply when

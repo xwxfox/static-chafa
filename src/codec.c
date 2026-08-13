@@ -477,6 +477,9 @@ typedef struct
     WebPAnimDecoder *webp_dec;
     uint8_t *webp_buf;
     int webp_len;
+    int webp_cached;        /* 1 = all frames decoded into rgbabuf */
+    int webp_total;         /* frames actually stored in rgbabuf */
+    int webp_pool_cap;      /* bytes available in rgbabuf (WebP only) */
     ChafaCanvas *canvas;
     ChafaCanvasConfig *canvas_cfg;
     ScaleScratch scratch;
@@ -634,8 +637,12 @@ static void compute_fit_box(const ChafaCanvas *canvas, int src_w, int src_h,
     double s = fmin((double)cw / (double)src_w, (double)ch / (double)src_h);
     int fw = (int)((double)src_w * s);
     int fh = (int)((double)src_h * s);
-    if (fw < 1) fw = 1;
-    if (fh < 1) fh = 1;
+    /* Even dims: video decode targets (swscale needs even YUV dims) must
+       equal the canvas fit box exactly, or every frame gets re-scaled. */
+    fw &= ~1;
+    fh &= ~1;
+    if (fw < 2) fw = 2;
+    if (fh < 2) fh = 2;
     if (fw > MAX_DIM) fw = MAX_DIM;
     if (fh > MAX_DIM) fh = MAX_DIM;
     *w_out = fw;
@@ -643,7 +650,10 @@ static void compute_fit_box(const ChafaCanvas *canvas, int src_w, int src_h,
 }
 
 /* Exposed for codec_video.c: compute decode target from a config, without
-   a canvas. Mirrors compute_fit_box() using cfg geometry. */
+   a canvas. Mirrors the canvas pixel area chafa will actually use
+   (chafa-canvas.c): symbol mode = term × 8×8 cells, pixel modes = term ×
+   cell geometry. Result matches compute_fit_box() exactly (even dims), so
+   frames decode 1:1 and no per-frame re-scale happens. */
 CODEC_EXPORT void codec_ctx_pixel_fit_box(const CodecCtx *ctx, int src_w, int src_h,
                                           int *w_out, int *h_out)
 {
@@ -653,11 +663,13 @@ CODEC_EXPORT void codec_ctx_pixel_fit_box(const CodecCtx *ctx, int src_w, int sr
         return;
 
     const CodecConfig *cfg = &ctx->cfg;
-    if (cfg->pixel_mode == 0 /* SYMBOLS */ || cfg->pixel_fit != PIXEL_FIT_SCALE)
+    if (cfg->pixel_fit != PIXEL_FIT_SCALE)
         return;
 
-    int cell_w = cfg->cell_w > 0 ? cfg->cell_w : 8;
-    int cell_h = cfg->cell_h > 0 ? cfg->cell_h : 16;
+    /* Chafa ignores cell_geometry in symbol mode and uses 8x8 symbol
+       cells (CHAFA_SYMBOL_WIDTH_PIXELS / HEIGHT_PIXELS). */
+    int cell_w = cfg->pixel_mode == 0 /* SYMBOLS */ ? 8 : (cfg->cell_w > 0 ? cfg->cell_w : 8);
+    int cell_h = cfg->pixel_mode == 0 /* SYMBOLS */ ? 8 : (cfg->cell_h > 0 ? cfg->cell_h : 16);
     int cw = cfg->term_w * cell_w;
     int ch = cfg->term_h * cell_h;
     if (cw <= 0 || ch <= 0)
@@ -666,8 +678,10 @@ CODEC_EXPORT void codec_ctx_pixel_fit_box(const CodecCtx *ctx, int src_w, int sr
     double s = fmin((double)cw / (double)src_w, (double)ch / (double)src_h);
     int fw = (int)((double)src_w * s);
     int fh = (int)((double)src_h * s);
-    if (fw < 1) fw = 1;
-    if (fh < 1) fh = 1;
+    fw &= ~1;
+    fh &= ~1;
+    if (fw < 2) fw = 2;
+    if (fh < 2) fh = 2;
     if (fw > MAX_DIM) fw = MAX_DIM;
     if (fh > MAX_DIM) fh = MAX_DIM;
     *w_out = fw;
@@ -1306,12 +1320,26 @@ CODEC_EXPORT int32_t codec_anim_open(CodecCtx *ctx, char *data, int32_t len,
 
     if (fmt == FMT_WEBP)
     {
-        WebPData wpd = {(uint8_t *)data, (size_t)len};
+        /* The WebP demuxer keeps a reference to the input data and reads it
+           lazily during WebPAnimDecoderGetNext() - it must NOT point at
+           caller-owned (JS) buffer memory, which the runtime can free or
+           move at any time. Own a copy up front and build the decoder on
+           top of it. */
+        AnimHandle *ah = calloc(1, sizeof(AnimHandle));
+        if (!ah) { *err = ERR_MALLOC; return -1; }
+        ah->type = ANIM_WEBP;
+        ah->webp_len = len;
+        ah->webp_buf = malloc((size_t)len);
+        if (!ah->webp_buf) { free(ah); *err = ERR_MALLOC; return -1; }
+        memcpy(ah->webp_buf, data, (size_t)len);
+
+        WebPData wpd = {ah->webp_buf, (size_t)len};
         WebPAnimDecoderOptions opts;
         WebPAnimDecoderOptionsInit(&opts);
         opts.color_mode = MODE_RGBA;
         WebPAnimDecoder *dec = WebPAnimDecoderNew(&wpd, &opts);
-        if (!dec) { *err = ERR_DECODE_FAIL; return -1; }
+        if (!dec) { free(ah->webp_buf); free(ah); *err = ERR_DECODE_FAIL; return -1; }
+        ah->webp_dec = dec;
 
         WebPAnimInfo inf;
         WebPAnimDecoderGetInfo(dec, &inf);
@@ -1319,63 +1347,45 @@ CODEC_EXPORT int32_t codec_anim_open(CodecCtx *ctx, char *data, int32_t len,
         /* Allocate pool for decoded frames (max 500 frames or 256MB) */
         int pool_cap = fs * 500;
         if (pool_cap > 256 * 1024 * 1024) pool_cap = 256 * 1024 * 1024;
-        uint8_t *pool = malloc(pool_cap);
-        if (!pool) { WebPAnimDecoderDelete(dec); *err = ERR_MALLOC; return -1; }
+        uint8_t *pool = malloc((size_t)pool_cap);
+        if (!pool) { WebPAnimDecoderDelete(dec); free(ah->webp_buf); free(ah); *err = ERR_MALLOC; return -1; }
 
         uint8_t *fbuf;
-        int ts, prev_ts = 0;
+        int ts;
         if (!WebPAnimDecoderGetNext(dec, &fbuf, &ts))
         {
             WebPAnimDecoderDelete(dec);
             free(pool);
+            free(ah->webp_buf);
+            free(ah);
             *err = ERR_DECODE_FAIL;
             return -1;
         }
-        memcpy(pool, fbuf, fs);
+        memcpy(pool, fbuf, (size_t)fs);
         out->img_w = w;
         out->img_h = iH;
         out->frame_delay_ms = ts;
         out->frame_count = -1;
 
-        AnimHandle *ah = calloc(1, sizeof(AnimHandle));
-        if (!ah)
-        {
-            WebPAnimDecoderDelete(dec);
-            free(pool);
-            *err = ERR_MALLOC;
-            return -1;
-        }
-        ah->type = ANIM_WEBP;
         ah->rgbabuf = pool;
         ah->w = w;
         ah->h = iH;
         ah->frame_size = fs;
         ah->total_frames = -1;
         ah->idx = 1;
+        ah->webp_pool_cap = pool_cap;
         ah->delays = malloc(sizeof(int) * 1000);
         if (!ah->delays)
         {
             WebPAnimDecoderDelete(dec);
             free(pool);
+            free(ah->webp_buf);
             free(ah);
             *err = ERR_MALLOC;
             return -1;
         }
         ah->delays[0] = ts;
-        ah->webp_dec = dec;
         ah->prev_ts = ts;
-        ah->webp_len = len;
-        ah->webp_buf = malloc(len);
-        if (!ah->webp_buf)
-        {
-            WebPAnimDecoderDelete(dec);
-            free(pool);
-            free(ah->delays);
-            free(ah);
-            *err = ERR_MALLOC;
-            return -1;
-        }
-        memcpy(ah->webp_buf, data, len);
 
         /* Create animation's own canvas from the current context config */
         ah->canvas_cfg = make_canvas_config(&ctx->cfg);
@@ -1520,17 +1530,29 @@ CODEC_EXPORT int32_t codec_anim_next(CodecCtx *ctx, int32_t handle, CodecMetrics
     if (h->type == ANIM_WEBP)
     {
         out->format = FMT_WEBP;
+        if (h->webp_cached)
+        {
+            /* Entire animation already decoded into the pool: serve
+               frames straight from memory (loops/rewinds are O(1)). */
+            if (h->idx >= h->webp_total) return -1;
+            out->frame_delay_ms = h->delays[h->idx];
+            return h->idx++;
+        }
         if (h->done) return -1;
         uint8_t *fbuf;
         int ts;
         if (!WebPAnimDecoderGetNext(h->webp_dec, &fbuf, &ts))
         {
+            /* Natural end of stream: everything is cached - mark it so
+               future loops and gotos skip the decoder entirely. */
             h->done = 1;
+            h->webp_cached = 1;
+            h->webp_total = h->idx;
             return -1;
         }
-        /* Check that we don't overflow the pool */
+        /* Check that we don't overflow the actual pool allocation */
         int offset = h->idx * h->frame_size;
-        if (offset + h->frame_size > 256 * 1024 * 1024)
+        if (offset + h->frame_size > h->webp_pool_cap)
         {
             h->done = 1;
             return -1;
@@ -1595,6 +1617,14 @@ CODEC_EXPORT int32_t codec_anim_rewind(CodecCtx *ctx, int32_t handle)
     if (h->type == ANIM_GIF) { h->idx = 0; return 0; }
     if (h->type == ANIM_WEBP)
     {
+        if (h->webp_cached)
+        {
+            /* All frames are in the pool - rewind is just an index reset. */
+            h->idx = 0;
+            h->done = 0;
+            h->aborted = 0;
+            return 0;
+        }
         WebPAnimDecoderDelete(h->webp_dec);
         WebPData wpd = {h->webp_buf, (size_t)h->webp_len};
         WebPAnimDecoderOptions opts;
@@ -1641,7 +1671,8 @@ CODEC_EXPORT void codec_anim_abort(CodecCtx *ctx, int32_t handle)
     ctx->handles[handle]->aborted = 1;
 }
 
-/* Jump to an absolute frame index. GIF: O(1). WebP: decoder rewind + skip.
+/* Jump to an absolute frame index. GIF: O(1). WebP: O(1) when the frame is
+   already decoded into the pool, otherwise decoder rewind + skip.
    After a successful goto, frame @frame_idx is "current": render_frame() can
    render it and the next codec_anim_next() returns frame_idx + 1.
    Returns 0 on success, -1 on invalid index. */
@@ -1664,6 +1695,14 @@ CODEC_EXPORT int32_t codec_anim_goto(CodecCtx *ctx, int32_t handle, int32_t fram
 
     if (h->type == ANIM_WEBP)
     {
+        /* Frame already decoded into the pool: jump in O(1). */
+        if (h->webp_cached && frame_idx < h->webp_total)
+        {
+            h->idx = frame_idx + 1;
+            h->done = 0;
+            h->aborted = 0;
+            return 0;
+        }
         /* Recreate the decoder and skip forward through the target frame */
         WebPAnimDecoderDelete(h->webp_dec);
         WebPData wpd = { h->webp_buf, (size_t)h->webp_len };
@@ -1677,6 +1716,7 @@ CODEC_EXPORT int32_t codec_anim_goto(CodecCtx *ctx, int32_t handle, int32_t fram
         h->done = 0;
         h->prev_ts = 0;
         h->aborted = 0;
+        h->webp_cached = 0;
 
         while (h->idx <= frame_idx && !h->done)
         {
@@ -1685,10 +1725,12 @@ CODEC_EXPORT int32_t codec_anim_goto(CodecCtx *ctx, int32_t handle, int32_t fram
             if (!WebPAnimDecoderGetNext(h->webp_dec, &fbuf, &ts))
             {
                 h->done = 1;
+                h->webp_cached = 1;
+                h->webp_total = h->idx;
                 break;
             }
             int offset = h->idx * h->frame_size;
-            if (offset + h->frame_size > 256 * 1024 * 1024)
+            if (offset + h->frame_size > h->webp_pool_cap)
             {
                 h->done = 1;
                 break;

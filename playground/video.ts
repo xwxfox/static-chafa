@@ -1,7 +1,12 @@
 #!/usr/bin/env bun
-/** @file playground/video.ts - Terminal video player. Space=play/pause, arrows=seek, Q=quit. */
+/** @file playground/video.ts - Terminal video player via the public Chafa API.
+ *  Same behavior as video-ffi.ts (which drives the low-level FFI path).
+ *  Space=play/pause, arrows=seek, Q=quit.
+ *
+ *  Unlike the FFI version, the Chafa constructor auto-probes the terminal's
+ *  real cell size so pixel modes fill the screen area exactly. */
 
-import { createContext, destroyContext, videoOpen, videoNext, videoClose, videoSeek, renderRgba, PixelMode } from "../src/ffi.ts";
+import Chafa from "../src/index.ts";
 import fs from "node:fs";
 import { execSync } from "child_process";
 
@@ -50,53 +55,75 @@ process.stdout.write("\x1b[2J\x1b[H\x1b[?25l");
 
 const buf = new Uint8Array(fs.readFileSync(PATH));
 
-// A single context owns both the video decoder and the render canvas.
-// Frames decode directly at the pixel-fit size (sixel: term x cell px)
-// and videoNext() returns a zero-copy view into the decoder ring buffer,
-// so only one frame buffer exists - no copies, no second canvas.
-const ctx = createContext({ termW: TW, termH: VH, pixelMode: PixelMode.SIXELS });
-const { handle } = videoOpen(ctx, buf, 0, 0);
+// One Chafa instance owns both the video decoder and the render canvas.
+// Frames decode directly at the pixel-fit size and nextFrame() returns a
+// zero-copy view into the decoder ring buffer, so only one frame buffer
+// exists - no copies, no second canvas. Pixel mode is auto-detected from
+// the terminal (kitty/sixel where supported, symbols otherwise).
+const chafa = new Chafa({ termW: TW, termH: VH });
+await chafa.probeReady; /* correct cell size before the first frame - no mid-stream resize */
+const video = chafa.openVideo(buf);
 
 const t0 = performance.now() / 1000;
 let fc = 0, pts = 0.0, idx = 0, rsum = 0, playWall = 0.0, playPts = 0.0;
+let fpsEma = 0;             /* smoothed current playback rate */
+let lastRenderMs = 0;
 
-let f = videoNext(ctx, handle);
+let f = video.nextFrame();
 if (!f) { process.stdout.write("\x1b[?25h\x1b[2JNo frames\n"); process.exit(1); }
 pts = f.ptsSec; idx = f.frameIndex;
-let ren = f.rgba!;
+let ren = f.rgba;
+let lastRendered = -1;
+let lastWrite = 0;
 
 function shutdown() {
     quit = true;
-    videoClose(ctx, handle); destroyContext(ctx);
+    video.close(); chafa.destroy();
     const e = performance.now() / 1000 - t0;
     process.stdout.write(`\x1b[2J\x1b[H\x1b[?25h${fc} frames in ${e.toFixed(1)}s | ${(fc / e).toFixed(0)}fps avg\n`);
     process.exit(0);
 }
 
 while (!quit) {
-    if (toggle) { playing = !playing; toggle = false; if (playing) { playWall = performance.now() / 1000; playPts = pts; } }
+    if (toggle) { playing = !playing; toggle = false; lastRendered = -1; if (playing) { playWall = performance.now() / 1000; playPts = pts; } }
     if (seekDelta !== 0) {
-        videoSeek(ctx, handle, Math.max(0, pts + seekDelta));
-        const n = videoNext(ctx, handle);
-        if (n) { pts = n.ptsSec; idx = n.frameIndex; f = n; ren = n.rgba!; if (playing) { playWall = performance.now() / 1000; playPts = pts; } }
+        video.seek(Math.max(0, pts + seekDelta));
+        const n = video.nextFrame();
+        if (n) { pts = n.ptsSec; idx = n.frameIndex; f = n; ren = n.rgba; lastRendered = -1; if (playing) { playWall = performance.now() / 1000; playPts = pts; } }
         seekDelta = 0;
     }
 
-    const r0 = performance.now();
-    const { ansi } = renderRgba(ctx, ren, f.w, f.h);
-    rsum += performance.now() - r0; fc++;
+    /* Only render+write when the frame actually changed, or at ~10Hz to
+       keep the status line fresh. Redundant 60Hz writes of the same frame
+       starve the terminal's write bandwidth for no visual gain. */
+    const nowMs = performance.now();
+    if (idx !== lastRendered || nowMs - lastWrite > 100) {
+        const r0 = performance.now();
+        const { ansi } = chafa.renderRgba(ren, f.width, f.height);
+        rsum += performance.now() - r0; fc++;
 
-    let out = `\x1b[1;1H\x1b[2K ${B}boykisser.mp4${R} ${f.w}x${f.h} ${playing ? `${B}▶${R}` : `${D}⏸${R}`} ${fmt(pts)} ${(fc / (performance.now() / 1000 - t0)).toFixed(0)}fps`;
-    const ls = ansi.split("\n");
-    for (let li = 0; li < Math.min(ls.length, VH); li++) out += `\x1b[${2 + li};1H${ls[li]}`;
-    out += `\x1b[${TH};1H\x1b[2K frame ${idx} ${(rsum / fc).toFixed(1)}ms ${D}␣ ←-> ↑↓ Q${R}`;
-    process.stdout.write(out);
+        /* Current rate: EMA of the interval between rendered frames
+           (updated only while playing, so pausing doesn't drag it down). */
+        if (playing && lastRenderMs > 0) {
+            const inst = 1000 / Math.max(1, nowMs - lastRenderMs);
+            fpsEma = fpsEma === 0 ? inst : fpsEma * 0.9 + inst * 0.1;
+        }
+        lastRenderMs = nowMs;
+
+        let out = `\x1b[1;1H\x1b[2K ${B}boykisser.mp4${R} ${f.width}x${f.height} ${playing ? `${B}▶${R}` : `${D}⏸${R}`} ${fmt(pts)} ${fpsEma.toFixed(0)}fps`;
+        const ls = ansi.split("\n");
+        for (let li = 0; li < Math.min(ls.length, VH); li++) out += `\x1b[${2 + li};1H${ls[li]}`;
+        out += `\x1b[${TH};1H\x1b[2K frame ${idx} ${(rsum / fc).toFixed(1)}ms ${D}␣ ←-> ↑↓ Q${R}`;
+        process.stdout.write(out);
+        lastRendered = idx;
+        lastWrite = nowMs;
+    }
 
     if (playing) {
         const w = performance.now() / 1000 - playWall;
         if (pts < playPts + w - 0.02) {
-            const n = videoNext(ctx, handle);
-            if (n) { pts = n.ptsSec; idx = n.frameIndex; f = n; ren = n.rgba!; }
+            const n = video.nextFrame();
+            if (n) { pts = n.ptsSec; idx = n.frameIndex; f = n; ren = n.rgba; }
             else { playing = false; }
         } else {
             await new Promise(r => setTimeout(r, 16));
