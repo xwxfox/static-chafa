@@ -123,6 +123,8 @@ function onMsg(job: Job, msg: any): void {
         job.evals++;
         job.lastEvalAt = Date.now();
         const o = msg.obs;
+        /* defensive: never let a poisoned obs (NaN fields) into the state */
+        if (!o || !Number.isFinite(o.ms) || !Number.isFinite(o.ssim) || !Number.isFinite(o.score)) return;
         if (!job.baseline) {
             job.baseline = o;
             job.best = o;
@@ -139,6 +141,7 @@ function onMsg(job: Job, msg: any): void {
         } else {
             job.stalled++;
         }
+        saveState();
     } else if (msg.type === "status") {
         job.evals = msg.evals;
         job.stalled = msg.stalled;
@@ -250,6 +253,7 @@ function renderPage(): void {
     const now2 = Date.now();
     const perJob = new Map<string, number>();
     const jobDelta = now2 - lastPageAt;
+    const fnum = (v: any, d = 2): string => (Number.isFinite(v) ? v.toFixed(d) : "?");
     for (const j of jobs) {
         const evalsBefore = lastPageEvals.get(j.id) ?? j.evals;
         const ops = jobDelta > 0 ? ((j.evals - evalsBefore) / (jobDelta / 1000)) : 0;
@@ -258,7 +262,7 @@ function renderPage(): void {
         const best = j.best?.score ?? 0;
         const imp = base !== 0 ? ((best - base) / Math.abs(base)) * 100 : 0;
         const bestLine = j.best
-            ? `ssim ${j.best.ssim.toFixed(4)}  ${j.best.ms.toFixed(2)}ms/f  ${(j.best.bytes / 1024).toFixed(0)}KB/f  ${summarize(j.best.config)}`
+            ? `ssim ${fnum(j.best.ssim, 4)}  ${fnum(j.best.ms)}ms/f  ${fnum((j.best.bytes ?? 0) / 1024, 0)}KB/f  ${summarize(j.best.config)}`
             : "waiting for first eval...";
         lines.push(
             `${j.id.padEnd(17)} ` +
@@ -346,6 +350,7 @@ async function shutdown(): Promise<void> {
 
     console.log("\n=== best configs ===");
     const bests: Record<string, any> = {};
+    const fnum = (v: any, d = 2): string => (Number.isFinite(v) ? v.toFixed(d) : "?");
     for (const j of jobs) {
         if (!j.best) continue;
         bests[j.id] = {
@@ -356,8 +361,8 @@ async function shutdown(): Promise<void> {
             baselineScore: j.baseline?.score ?? null,
         };
         console.log(
-            `${j.id.padEnd(18)} ssim ${j.best.ssim.toFixed(4)} ${j.best.ms.toFixed(2)}ms/f ` +
-            `${(j.best.bytes / 1024).toFixed(0)}KB/f ${summarize(j.best.config)}`,
+            `${j.id.padEnd(18)} ssim ${fnum(j.best.ssim, 4)} ${fnum(j.best.ms)}ms/f ` +
+            `${fnum((j.best.bytes ?? 0) / 1024, 0)}KB/f ${summarize(j.best.config)}`,
         );
     }
     fs.writeFileSync(path.join(OUT, "best_configs.json"), JSON.stringify(bests, null, 2));

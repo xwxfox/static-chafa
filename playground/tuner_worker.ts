@@ -252,7 +252,8 @@ function cacheFor(config: Record<string, number | string>): CachedMedia[] {
 function evalConfig(config: Record<string, number | string>, cache: CachedMedia[]): Obs | null {
     phase = `eval ${JSON.stringify(config).slice(0, 50)}`;
     const ditherGrain = config["ditherGrainW"] as number | undefined;
-    const decodeScale = hasVideo ? (config["decodeScale"] as number ?? 1.0) : 1.0;
+    const ds = hasVideo ? Number(config["decodeScale"]) : 1.0;
+    const decodeScale = Number.isFinite(ds) && ds > 0 ? ds : 1.0;
 
     const chafa = new Chafa({
         termW: job.termW, termH: job.termH,
@@ -353,12 +354,19 @@ function sampleConfig(params: ParamDef[], obs: Obs[]): Record<string, number | s
         return cfg;
     }
     const sorted = [...obs].sort((a, b) => b.score - a.score);
-    const good = sorted.slice(0, Math.max(2, Math.floor(sorted.length * 0.25)));
+    /* The baseline obs has an empty config {} - it must never feed the
+       distribution fit (undefined values poison the mean -> NaN cascade). */
+    const withCfg = sorted.filter((o) => o.config && Object.keys(o.config).length > 0);
+    const good = withCfg.slice(0, Math.max(2, Math.floor(sorted.length * 0.25)));
     for (const p of params) {
         if (p.kind === "cat") {
             const weights = new Map<number | string, number>();
             for (const v of p.values!) weights.set(v, 0.1);
-            for (const o of good) weights.set(o.config[p.name]!, (weights.get(o.config[p.name]!) ?? 0.1) + 1);
+            for (const o of good) {
+                const val = o.config[p.name];
+                if (val === undefined || val === null) continue;
+                weights.set(val, (weights.get(val) ?? 0.1) + 1);
+            }
             let total = 0;
             for (const w of weights.values()) total += w;
             let r = Math.random() * total;
@@ -369,7 +377,13 @@ function sampleConfig(params: ParamDef[], obs: Obs[]): Record<string, number | s
             }
             cfg[p.name] = pick;
         } else {
-            const vals = good.map((o) => o.config[p.name] as number);
+            const vals = good
+                .map((o) => o.config[p.name] as number)
+                .filter((v) => Number.isFinite(v));
+            if (vals.length === 0) {
+                cfg[p.name] = +(p.min! + Math.random() * (p.max! - p.min!)).toFixed(4);
+                continue;
+            }
             const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
             const std = Math.max(
                 1e-3,
@@ -377,7 +391,9 @@ function sampleConfig(params: ParamDef[], obs: Obs[]): Record<string, number | s
             );
             let v = vals[Math.floor(Math.random() * vals.length)]! + gauss() * std;
             v = Math.min(p.max!, Math.max(p.min!, v));
-            cfg[p.name] = +v.toFixed(4);
+            cfg[p.name] = Number.isFinite(v)
+                ? +v.toFixed(4)
+                : +(p.min! + Math.random() * (p.max! - p.min!)).toFixed(4);
         }
     }
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -404,7 +420,9 @@ async function main(): Promise<void> {
         params.push({ name: "swsScale", kind: "cat", values: [0, 1, 2, 3, 4] });
     }
 
-    const obs: Obs[] = Array.isArray(job.resume) ? job.resume : [];
+    /* sanitize resume data: earlier buggy runs may contain NaN-poisoned obs */
+    const obs: Obs[] = (Array.isArray(job.resume) ? job.resume : [])
+        .filter((o) => o && Number.isFinite(o.ms) && Number.isFinite(o.ssim) && Number.isFinite(o.score));
     let best = obs.length > 0 ? obs.reduce((a, b) => (b.score > a.score ? b : a)) : null;
     let stalled = 0;
 
