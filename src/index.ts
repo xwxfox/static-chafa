@@ -19,6 +19,7 @@
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 import { defaultConfig as defaultChafaConfig, PixelMode, CanvasMode } from "./types.ts";
+import { tunedDefaults } from "./tuned.ts";
 
 const { platform, arch } = process;
 const SUFFIX = `${platform}-${arch}`;
@@ -62,6 +63,7 @@ export {
     defaultConfig,
     pixelCanvasSize,
 } from "./types.ts";
+export { tunedDefaults } from "./tuned.ts";
 
 /* -- helpers -- */
 function ensureBuffer(data: Uint8Array): Buffer {
@@ -866,6 +868,9 @@ export class Chafa {
     #probed = false;
     #rendered = false;
     #probeReady: Promise<void> = Promise.resolve();
+    /** Config keys the user set explicitly (constructor or updateConfig).
+        Tuned defaults never touch these. */
+    #userSet = new Set<string>();
 
     /**
      * Create a new chafa instance.
@@ -890,10 +895,12 @@ export class Chafa {
         const auto = detectEnvDefaults();
         const user = config ?? {};
         const explicit = new Set(Object.keys(user));
+        this.#userSet = explicit;
         for (const key of Object.keys(auto)) {
             if (!(key in user)) (user as any)[key] = (auto as any)[key];
         }
         this.#config = { ...defaultChafaConfig(), ...user };
+        if (this.#config.tuned) this.#applyTuned();
         const r = native.chafaCreate(this.#config);
         if (!r) throw new Error("Failed to create chafa instance");
         this.#ctx = r;
@@ -954,6 +961,11 @@ export class Chafa {
      * Update one or more configuration fields.
      * Invalidates the internal canvas so the next render picks up new settings.
      *
+     * Fields you pass become "user-set": tuned defaults (see {@link tunedDefaults})
+     * will never override them again. When `pixelMode` / `termW` / `termH`
+     * change, tuned defaults are re-derived for the new mode/size and applied
+     * to all fields you haven't set yourself.
+     *
      * @param config Fields to update. Omitted fields keep their current value.
      *
      * @example
@@ -966,8 +978,26 @@ export class Chafa {
      * ```
      */
     updateConfig(config: import("./types.ts").ChafaConfigPartial): void {
+        for (const key of Object.keys(config)) this.#userSet.add(key);
+        const modeChanged =
+            (config.pixelMode !== undefined && config.pixelMode !== this.#config.pixelMode) ||
+            (config.termW !== undefined && config.termW !== this.#config.termW) ||
+            (config.termH !== undefined && config.termH !== this.#config.termH);
         Object.assign(this.#config, config);
+        if (this.#config.tuned && modeChanged) this.#applyTuned();
         native.chafaConfigure(this.#ctx, this.#config);
+    }
+
+    /** Fill fields the user didn't set with tuned per-mode/size defaults. */
+    #applyTuned(): void {
+        const tuned = tunedDefaults(
+            this.#config.pixelMode,
+            this.#config.termW,
+            this.#config.termH,
+        );
+        for (const [key, value] of Object.entries(tuned)) {
+            if (!this.#userSet.has(key)) (this.#config as any)[key] = value;
+        }
     }
 
     /* ════ Image operations ════ */

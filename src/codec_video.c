@@ -89,6 +89,7 @@ extern int32_t codec_ctx_get_pixel_fit(CodecCtx *ctx);
 extern int32_t codec_ctx_get_video_include_audio(CodecCtx *ctx);
 extern int32_t codec_ctx_get_video_threads(CodecCtx *ctx);
 extern int32_t codec_ctx_get_sws_scale(CodecCtx *ctx);
+extern float codec_ctx_get_video_decode_scale(CodecCtx *ctx);
 
 /* Error codes from codec.c */
 #define ERR_OK 0
@@ -528,6 +529,16 @@ CODEC_EXPORT int codec_video_open(CodecCtx *ctx, char *data, int32_t len,
     {
         int fit_w = vh->src_w, fit_h = vh->src_h;
         codec_ctx_pixel_fit_box(ctx, vh->src_w, vh->src_h, &fit_w, &fit_h);
+        /* Tuned decode scale: fraction of the fit box (cheaper decode at
+           reduced quality). Only applies to the auto-sized path. */
+        float vds = codec_ctx_get_video_decode_scale(ctx);
+        if (vds < 1.0f)
+        {
+            fit_w = (int)((float)fit_w * vds) & ~1;
+            fit_h = (int)((float)fit_h * vds) & ~1;
+            if (fit_w < 2) fit_w = 2;
+            if (fit_h < 2) fit_h = 2;
+        }
         vh->decode_w = decode_w > 0 ? decode_w : fit_w;
         vh->decode_h = decode_h > 0 ? decode_h : fit_h;
     }

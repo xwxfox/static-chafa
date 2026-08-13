@@ -23,6 +23,7 @@ typedef struct
     int32_t video_include_audio;
     int32_t video_threads;
     int32_t sws_scale;
+    float video_decode_scale;
     char symbols[128];
     char fill_symbols[128];
 } CodecConfig;
@@ -237,6 +238,7 @@ static void read_config(napi_env env, napi_value obj, CodecConfig *cfg)
     cfg->pixel_fit = 1; /* SCALE */
     cfg->video_threads = 0;
     cfg->sws_scale = 0;
+    cfg->video_decode_scale = 1.0f;
 
     int32_t iv;
     double dv;
@@ -267,6 +269,7 @@ static void read_config(napi_env env, napi_value obj, CodecConfig *cfg)
     if (read_int32(env, obj, "videoIncludeAudio", &iv)) cfg->video_include_audio = iv;
     if (read_int32(env, obj, "videoThreads", &iv)) cfg->video_threads = iv;
     if (read_int32(env, obj, "swsScale", &iv)) cfg->sws_scale = iv;
+    if (read_double(env, obj, "videoDecodeScale", &dv)) cfg->video_decode_scale = (float)dv;
 
     read_string(env, obj, "symbols", cfg->symbols, sizeof(cfg->symbols));
     read_string(env, obj, "fillSymbols", cfg->fill_symbols, sizeof(cfg->fill_symbols));

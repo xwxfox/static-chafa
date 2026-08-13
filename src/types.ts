@@ -205,6 +205,12 @@ export interface ChafaConfig {
     videoThreads: number;
     /** FFmpeg swscale filter for YUV->RGBA video decode. See {@link SwsScale}. Default: AUTO */
     swsScale: number;
+    /** Video decode target as a fraction of the pixel-fit size (0..1).
+     *  Lower = smaller frames = faster decode at reduced quality. Default: 1.0 */
+    videoDecodeScale: number;
+    /** Apply tuned per-mode/size defaults (from playground/tuner.ts results)
+     *  to fields you didn't set explicitly. 1 = on (default), 0 = off. */
+    tuned: number;
     /** Max animation frames to decode. -1 = all frames. Default: -1 */
     maxFrames: number;
     /** Animation playback speed multiplier. 1.0 = native speed. Default: 1.0 */
@@ -415,6 +421,8 @@ export function defaultConfig(): ChafaConfig {
         videoIncludeAudio: 0,
         videoThreads: 0,
         swsScale: SwsScale.AUTO,
+        videoDecodeScale: 1.0,
+        tuned: 1,
         maxFrames: -1,
         speed: 1.0,
         symbols: "",

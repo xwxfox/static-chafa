@@ -164,6 +164,7 @@ typedef struct
     int32_t video_include_audio;
     int32_t video_threads;
     int32_t sws_scale;
+    float video_decode_scale;
     char symbols[128];
     char fill_symbols[128];
 } CodecConfig;
@@ -452,6 +453,7 @@ static void config_init(CodecConfig *cfg)
     cfg->pixel_fit = PIXEL_FIT_SCALE;
     cfg->video_threads = 0;   /* auto */
     cfg->sws_scale = 0;       /* auto (fast bilinear when downscaling) */
+    cfg->video_decode_scale = 1.0f;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -610,6 +612,12 @@ CODEC_EXPORT int32_t codec_ctx_get_video_threads(CodecCtx *ctx)
 CODEC_EXPORT int32_t codec_ctx_get_sws_scale(CodecCtx *ctx)
 {
     return ctx ? ctx->cfg.sws_scale : 0;
+}
+CODEC_EXPORT float codec_ctx_get_video_decode_scale(CodecCtx *ctx)
+{
+    if (!ctx) return 1.0f;
+    float s = ctx->cfg.video_decode_scale;
+    return (s > 0.0f && s <= 1.0f) ? s : 1.0f;
 }
 /** @} */
 

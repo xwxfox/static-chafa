@@ -164,7 +164,7 @@ function summarize(cfg: Record<string, any>): string {
     if (cfg.preprocessing) p.push("pre");
     if (cfg.colorExtractor) p.push("median");
     if (cfg.colorSpace) p.push("din99d");
-    if (cfg.decodeScale !== undefined && cfg.decodeScale < 1) p.push(`dec=${cfg.decodeScale}`);
+    if (cfg.videoDecodeScale !== undefined && cfg.videoDecodeScale < 1) p.push(`dec=${cfg.videoDecodeScale}`);
     if (cfg.fgOnly) p.push("fgOnly");
     if (cfg.alphaThreshold !== undefined && cfg.alphaThreshold !== 127) p.push(`alpha=${cfg.alphaThreshold}`);
     if (cfg.bgColor === 0xffffff) p.push("bg=white");
@@ -370,7 +370,7 @@ async function shutdown(): Promise<void> {
     console.log("\n=== term-size -> config formulas (value = slope*log2(pixelArea) + intercept) ===");
     const formulas: Record<string, any> = {};
     for (const mode of MODES) {
-        for (const param of ["workFactor", "ditherIntensity", "ditherMode", "canvasMode", "preprocessing", "colorExtractor", "colorSpace", "decodeScale", "alphaThreshold", "bgColor", "optimizations", "pixelFit", "swsScale", "videoThreads"]) {
+        for (const param of ["workFactor", "ditherIntensity", "ditherMode", "canvasMode", "preprocessing", "colorExtractor", "colorSpace", "videoDecodeScale", "alphaThreshold", "bgColor", "optimizations", "pixelFit", "swsScale", "videoThreads"]) {
             const f = fitFormula(mode, param);
             if (f) {
                 formulas[`${mode}.${param}`] = f;

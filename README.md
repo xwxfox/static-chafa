@@ -212,9 +212,33 @@ Key config fields:
 | `videoIncludeAudio` | number | 0 | Decode video audio into per-frame PCM (1 = on) |
 | `videoThreads` | number | 0 | FFmpeg decoder thread count (0 = auto) |
 | `swsScale` | number | 0 | FFmpeg scaler: `SwsScale.AUTO` / `BILINEAR` / `POINT` / `AREA` / `FAST_BILINEAR` |
+| `videoDecodeScale` | number | 1.0 | Video decode target as a fraction of the fit size (lower = faster decode, lower quality) |
+| `tuned` | number | 1 | Apply tuned per-mode/size defaults (see below). 0 = off |
 | `ditherMode` | number | 0 | `DitherMode.NONE` / `ORDERED` / `DIFFUSION` / `NOISE` |
 | `symbols` | string | "" | Chafa CLI selector string (e.g. `"block+border+space-wide"`) |
 | `fillSymbols` | string | "" | Fill symbol map selector string |
+
+### Tuned defaults
+
+`playground/tuner.ts` (a multi-hour Bayesian optimizer scoring
+`SSIM*100 - lambda*ms` across terminal sizes and media) found per-(pixel
+mode, terminal size) optimal configs, which are baked into the library as
+defaults. On construction - and whenever you switch `pixelMode`, `termW`,
+or `termH` via `updateConfig()` - fields you haven't set explicitly are
+filled from these tuned values (numeric fields interpolate smoothly between
+probed terminal sizes; categorical fields follow the nearest size):
+
+```ts
+const chafa = new Chafa({ termW: 120, termH: 40 });   // tuned symbol defaults
+chafa.updateConfig({ pixelMode: PixelMode.KITTY });    // re-tunes for kitty
+chafa.updateConfig({ termW: 240, termH: 72 });         // re-tunes for the size
+
+// Opt out - anything you pass explicitly always wins, and you can disable
+// the whole mechanism:
+new Chafa({ tuned: 0 });
+```
+
+Inspect or reuse the logic yourself with `tunedDefaults(pixelMode, termW, termH)`.
 
 In pixel modes the output occupies `termW × cellW` by `termH × cellH` screen pixels
 (640×384 by default), filling the same terminal area as symbol mode. With

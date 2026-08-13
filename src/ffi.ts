@@ -54,7 +54,7 @@ function ptrOrThrow(v: Uint8Array | Int32Array | Float64Array): Pointer {
 const asPtr = (n: number | Pointer | null) => n as unknown as Pointer;
 
 /* -- CodecConfig layout (must match codec.c byte-for-byte) --
-   Layout: 26 fields (int32/float) + 2 × 128 byte char buffers
+   Layout: 27 fields (int32/float) + 2 × 128 byte char buffers
    Fields in order:
      i[0]  term_w          f[4]  work_factor      f[16] dither_intensity
      i[1]  term_h          i[5]  dither_mode       i[17] fg_only
@@ -66,12 +66,13 @@ const asPtr = (n: number | Pointer | null) => n as unknown as Pointer;
                            i[11] bg_color          i[23] video_include_audio
                            i[12] fg_color          i[24] video_threads
                            i[13] alpha_threshold   i[25] sws_scale
-                           i[14] dither_grain_w    :104  symbols[128]
-                           i[15] dither_grain_h    :232  fill_symbols[128]
-                                                  =360 bytes total
+                           i[14] dither_grain_w    f[26] video_decode_scale
+                           i[15] dither_grain_h    :108  symbols[128]
+                                                   :236  fill_symbols[128]
+                                                  =364 bytes total
 */
-const CONFIG_INTS = 26;   // 26 × 4 = 104 bytes of int32/float fields
-const CONFIG_SIZE = CONFIG_INTS * 4 + 128 + 128; // 360 bytes
+const CONFIG_INTS = 27;   // 27 × 4 = 108 bytes of int32/float fields
+const CONFIG_SIZE = CONFIG_INTS * 4 + 128 + 128; // 364 bytes
 
 let _cfgBuf: Uint8Array | null = null;
 let _metricsBuf: Uint8Array | null = null;
@@ -121,8 +122,9 @@ function configToNative(cfg: ChafaConfig): Uint8Array {
     i[23] = cfg.videoIncludeAudio;
     i[24] = cfg.videoThreads;
     i[25] = cfg.swsScale;
+    f[26] = cfg.videoDecodeScale;
 
-    /* Write symbols string at byte offset 104, fillSymbols at 232 */
+    /* Write symbols string at byte offset 108, fillSymbols at 236 */
     const writeStr = (str: string | undefined, off: number) => {
         if (!str) { b[off] = 0; return; }
         const bytes = _textEncoder.encode(str);
@@ -130,8 +132,8 @@ function configToNative(cfg: ChafaConfig): Uint8Array {
         for (let j = 0; j < n; j++) b[off + j] = bytes[j]!;
         b[off + n] = 0;
     };
-    writeStr(cfg.symbols, 104);
-    writeStr(cfg.fillSymbols, 232);
+    writeStr(cfg.symbols, 108);
+    writeStr(cfg.fillSymbols, 236);
 
     return b;
 }

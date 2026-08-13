@@ -146,7 +146,7 @@ function makeRef(rgba: Uint8Array, w: number, h: number): Uint8Array {
 
 function buildVideoMedia(file: string, cfg: Record<string, number | string>): CachedMedia {
     const buf = fs.readFileSync(file);
-    const chafa = new Chafa({
+    const chafa = new Chafa({ tuned: 0,
         termW: job.termW, termH: job.termH,
         cellW: 8, cellH: 16, pixelMode: MODE_NUM[job.mode]!,
         canvasMode: CanvasMode.TRUECOLOR,
@@ -176,7 +176,7 @@ function buildVideoMedia(file: string, cfg: Record<string, number | string>): Ca
 
 function buildAnimMedia(file: string): CachedMedia {
     const buf = fs.readFileSync(file);
-    const chafa = new Chafa({
+    const chafa = new Chafa({ tuned: 0,
         termW: job.termW, termH: job.termH,
         cellW: 8, cellH: 16, pixelMode: MODE_NUM[job.mode]!,
         canvasMode: CanvasMode.TRUECOLOR,
@@ -205,7 +205,7 @@ function buildAnimMedia(file: string): CachedMedia {
 
 function buildImageMedia(file: string): CachedMedia {
     const buf = fs.readFileSync(file);
-    const chafa = new Chafa({
+    const chafa = new Chafa({ tuned: 0,
         termW: job.termW, termH: job.termH,
         cellW: 8, cellH: 16, pixelMode: MODE_NUM[job.mode]!,
         canvasMode: CanvasMode.TRUECOLOR,
@@ -234,7 +234,7 @@ function cacheFor(config: Record<string, number | string>): CachedMedia[] {
     const videoFiles = job.media.filter((m) => /\.(mp4|mkv|webm|avi|mov)$/i.test(m));
     if (videoFiles.length === 0) return staticCache;
 
-    const key = `${config["pixelFit"] ?? 1}|${config["videoThreads"] ?? 0}|${config["swsScale"] ?? 0}`;
+    const key = `${config["pixelFit"] ?? 1}|${config["videoThreads"] ?? 0}|${config["swsScale"] ?? 0}|${config["videoDecodeScale"] ?? 1.0}`;
     let v = videoVariants.get(key);
     if (!v) {
         v = videoFiles.map((f) => buildVideoMedia(f, config));
@@ -252,10 +252,8 @@ function cacheFor(config: Record<string, number | string>): CachedMedia[] {
 function evalConfig(config: Record<string, number | string>, cache: CachedMedia[]): Obs | null {
     phase = `eval ${JSON.stringify(config).slice(0, 50)}`;
     const ditherGrain = config["ditherGrainW"] as number | undefined;
-    const ds = hasVideo ? Number(config["decodeScale"]) : 1.0;
-    const decodeScale = Number.isFinite(ds) && ds > 0 ? ds : 1.0;
 
-    const chafa = new Chafa({
+    const chafa = new Chafa({ tuned: 0,
         termW: job.termW, termH: job.termH,
         cellW: 8, cellH: 16,
         pixelMode: MODE_NUM[job.mode]!,
@@ -270,18 +268,9 @@ function evalConfig(config: Record<string, number | string>, cache: CachedMedia[
                 const t0 = performance.now();
                 let raster: Uint8Array | null = null;
                 let rasterW = 0;
-                let rgba = fr.rgba;
-                let w = fr.w, h = fr.h;
-                let refRgb = fr.refRgb;
-                if (fr.video && decodeScale < 1.0) {
-                    /* simulate a lower decode target: bilinear downscale;
-                       the ground truth also changes - recompute the ref */
-                    w = Math.max(2, Math.round(fr.w * decodeScale) & ~1);
-                    h = Math.max(2, Math.round(fr.h * decodeScale) & ~1);
-                    rgba = bilinearScale(fr.rgba, fr.w, fr.h, w, h);
-                    const ref = stretchToCanvas(rgba, w, h);
-                    refRgb = ref.rgb;
-                }
+                const rgba = fr.rgba;
+                const w = fr.w, h = fr.h;
+                const refRgb = fr.refRgb;
                 if (job.mode === "symbols") {
                     const rr = chafa.renderRgba(rgba, w, h);
                     if (!rr) continue;
@@ -316,7 +305,7 @@ function evalConfig(config: Record<string, number | string>, cache: CachedMedia[
                 const s = ssim(raster, refRgb, rasterW, h2);
                 if (Number.isNaN(s) || Number.isNaN(p)) continue;
                 ssimSum += s; psnrSum += p;
-                msSum += ms + (fr.video ? fr.decodeMs * decodeScale * decodeScale : 0);
+                msSum += ms + fr.decodeMs;
                 n++;
             }
         }
@@ -415,7 +404,7 @@ async function main(): Promise<void> {
     phase = "tune";
     const params = [...MODE_PARAMS[job.mode]!];
     if (hasVideo) {
-        params.push({ name: "decodeScale", kind: "float", min: 0.4, max: 1.0 });
+        params.push({ name: "videoDecodeScale", kind: "float", min: 0.4, max: 1.0 });
         params.push({ name: "videoThreads", kind: "cat", values: [0, 1, 4, 8] });
         params.push({ name: "swsScale", kind: "cat", values: [0, 1, 2, 3, 4] });
     }

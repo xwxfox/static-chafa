@@ -631,7 +631,7 @@ async function cmdRender(): Promise<void> {
 
     const modeReports: ModeReport[] = [];
     for (const mode of modes) {
-        const chafa = new Chafa({
+        const chafa = new Chafa({ tuned: 0,
             termW, termH, pixelMode: MODE_NAMES[mode],
             canvasMode: CanvasMode.TRUECOLOR,
             ...(CONFIG_JSON as any),
@@ -695,7 +695,7 @@ async function tuneOne(file: string, label: string, cfgOver: Record<string, numb
     const decodeScale = typeof cfgOver["decodeScale"] === "number" ? cfgOver["decodeScale"] as number : 1.0;
     const cfg: any = { ...cfgOver };
     delete cfg.decodeScale;
-    const chafa = new Chafa({ termW, termH, pixelMode: MODE_NAMES[mode], ...cfg });
+    const chafa = new Chafa({ termW, termH, pixelMode: MODE_NAMES[mode], tuned: 0, ...cfg });
     await chafa.probeReady;
     const src = await openSource(file, chafa, decodeScale);
     const canvasPw = mode === "symbols" ? termW * 8 : termW * chafa.config.cellW;
