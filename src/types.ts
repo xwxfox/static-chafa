@@ -181,6 +181,10 @@ export interface ChafaConfig {
     passthrough: number;
     /** Pixel-mode fit strategy. See {@link PixelFit}. Default: SCALE */
     pixelFit: number;
+    /** Decode video audio into per-frame PCM samples (interleaved float).
+     *  0 = discard audio entirely (default, saves CPU/memory).
+     *  1 = decode audio; `video.nextFrame().audio` returns the frame's samples. */
+    videoIncludeAudio: number;
     /** Max animation frames to decode. -1 = all frames. Default: -1 */
     maxFrames: number;
     /** Animation playback speed multiplier. 1.0 = native speed. Default: 1.0 */
@@ -212,7 +216,9 @@ export interface CodecMetrics {
     drawMs: number;
     /** Time spent in `chafa_canvas_print` - ANSI string generation (ms) */
     buildMs: number;
-    /** `parseMs + drawMs + buildMs` (ms) */
+    /** Time spent pre-scaling pixels to the fit box (ms). 0 when no scaling happened (pixelFit NONE or already 1:1) */
+    scaleMs: number;
+    /** `parseMs + scaleMs + drawMs + buildMs` (ms) */
     totalMs: number;
     /** Source image width in pixels */
     imgW: number;
@@ -272,6 +278,48 @@ export interface AnimFrame {
     metrics: CodecMetrics;
 }
 
+/** Emitted by {@link ChafaAnimation.onFrame} (play path includes ansi). */
+export interface AnimFrameEvent extends AnimFrame {
+    /** Rendered ANSI output for the frame (present when playing / after goto). */
+    ansi?: string;
+    /** True when this frame was reached via an automatic loop wrap. */
+    looped?: boolean;
+}
+
+/** Emitted by {@link ChafaVideo.onFrame}. */
+export interface VideoFrameEvent extends VideoFrame {
+    /** Interleaved float32 PCM for this frame's timespan (requires `videoIncludeAudio`). */
+    audio?: Float32Array | null;
+}
+
+/** Terminal capabilities detected by {@link Chafa.detect}. */
+export interface TerminalInfo {
+    /** Terminal type from $TERM */
+    term: string;
+    /** Terminal program from $TERM_PROGRAM */
+    termProgram: string;
+    /** Terminal width in cells (0 = unknown) */
+    termW: number;
+    /** Terminal height in cells (0 = unknown) */
+    termH: number;
+    /** Cell width in pixels (0 = unknown) */
+    cellW: number;
+    /** Cell height in pixels (0 = unknown) */
+    cellH: number;
+    /** Supported pixel modes in preference order. Empty = no pixel protocol detected. */
+    pixelModes: number[];
+    /** Best pixel mode to use (PixelMode.SYMBOLS when none supported). */
+    pixelMode: number;
+    /** Best canvas color mode (CanvasMode.TRUECOLOR / INDEXED_256 / ...). */
+    canvasMode: number;
+    /** Whether truecolor output is believed safe. */
+    truecolor: boolean;
+    /** Whether active terminal probing succeeded (false = env-only detection). */
+    probed: boolean;
+    /** Env vars snapshot used for detection */
+    env: { TERM?: string; TERM_PROGRAM?: string; COLORTERM?: string; KITTY_WINDOW_ID?: string };
+}
+
 /** Raw decoded image data returned by {@link Chafa.decode}. */
 export interface ChafaImageData {
     /** RGBA pixel buffer (8 bits per channel, unassociated alpha) */
@@ -298,6 +346,15 @@ export interface VideoFrame {
     ptsSec: number;
     /** Frame index (0-based, monotonic within a session) */
     frameIndex: number;
+    /** Interleaved float32 PCM covering this frame's timespan.
+     *  Only present when the config option `videoIncludeAudio` is enabled. */
+    audio?: Float32Array | null;
+    /** Number of PCM sample frames in `audio` */
+    audioSamples?: number;
+    /** Audio channel count */
+    audioChannels?: number;
+    /** Audio sample rate in Hz */
+    audioSampleRate?: number;
     /** Video playback metadata (frame delay, dimensions) */
     metrics: CodecMetrics;
 }
@@ -335,6 +392,7 @@ export function defaultConfig(): ChafaConfig {
         optimizations: 0x7fffffff,
         passthrough: Passthrough.NONE,
         pixelFit: PixelFit.SCALE,
+        videoIncludeAudio: 0,
         maxFrames: -1,
         speed: 1.0,
         symbols: "",

@@ -288,6 +288,11 @@ of each option.
 | \`cellW\` | 8 | Cell width in pixels (pixel modes only) |
 | \`cellH\` | 16 | Cell height in pixels (pixel modes only); 16 matches a typical 1:2 font aspect so output fills the same area as symbol mode |
 
+### Video
+| Field | Default | Description |
+|-------|---------|-------------|
+| \`videoIncludeAudio\` | 0 | Decode audio into per-frame interleaved float PCM. 0 discards audio entirely (saves CPU/memory), 1 exposes \`frame.audio\` |
+
 ### Output
 | Field | Default | Description |
 |-------|---------|-------------|

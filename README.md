@@ -43,13 +43,14 @@ process.stdout.write(ansi);
 console.log(metrics);
 // {
 //   parseMs: 5.4,    // image decode time
+//   scaleMs: 0.0,    // pixel-fit pre-scale time (0 when no scaling)
 //   drawMs: 2.6,     // chafa symbol matching
 //   buildMs: 0.1,    // ANSI string generation
 //   totalMs: 8.1,    // sum
 //   imgW: 641, imgH: 641,
 //   canvasW: 80, canvasH: 24,
 //   canvasPw: 640, canvasPh: 192,
-//   format: 0, canvasMode: 0, pixelMode: 0
+//   format: 0, canvasMode: 0, pixelMode: 0, pixelFit: 1
 // }
 
 chafa.destroy();
@@ -81,11 +82,22 @@ const chafa = new Chafa({
 | `renderPath(path)` | `{ ansi, metrics }` | Read file + render to ANSI string |
 | `decode(buffer)` | `ChafaImage` | Decode to raw RGBA pixels |
 | `renderRgba(rgba, w, h)` | `{ ansi, metrics }` | Render pre-decoded RGBA |
-| `renderMatrix(buffer)` | `{ matrix, metrics }` | Decode + render to JSON cell grid |
-| `renderMatrixRgba(rgba, w, h)` | `{ matrix, metrics }` | Render pre-decoded RGBA to cell grid |
+| `renderMatrix(buffer)` | `{ matrix, metrics }` | Decode + render to JSON cell grid (symbol mode only) |
+| `renderMatrixRgba(rgba, w, h)` | `{ matrix, metrics }` | Render pre-decoded RGBA to cell grid (symbol mode only) |
+| `openAnimation(buffer)` | `ChafaAnimation` | Open animated GIF/WebP |
 | `openVideo(buffer, decodeW?, decodeH?)` | `ChafaVideo` | Open video file (MP4/MKV/WebM/AVI) |
 | `updateConfig(partial)` | `void` | Update config (invalidates canvas) |
+| `autoDetect(timeoutMs?)` | `Promise<TerminalInfo>` | Probe the terminal and apply capabilities |
+| `info()` | `{ config, features, lastMetrics }` | Debug / perf snapshot |
 | `destroy()` | `void` | Free all native resources |
+
+Static utilities:
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Chafa.detect(timeoutMs?)` | `Promise<TerminalInfo>` | Probe terminal: pixel protocols, cell size, colors |
+| `Chafa.supportedFeatures()` | `string` | CPU features (e.g. "POPCNT") |
+| `Chafa.ansiToHtml(ansi)` | `string` | ANSI art to HTML |
 
 ### `ChafaImage`
 
@@ -107,43 +119,70 @@ chafa.renderRgba(img.rgba, img.width, img.height);
 
 ### `ChafaAnimation`
 
-Controls frame-by-frame playback of animated GIF/WebP.
+Plays animated GIF/WebP with an integrated player: `play()` / `pause()` /
+`goto()` plus `onFrame()` events. Works in every pixel mode - `play()`
+renders frames with the owning instance's config (sixels, kitty, symbols),
+sized to fill the terminal.
 
 ```ts
 const anim = chafa.openAnimation(gifBuffer);
-anim.frameCount;     // 58
-anim.width;          // 640
-anim.height;         // 640
-anim.imageFormat;    // 3 (GIF)
-
-while (true) {
-    const frame = anim.next();
-    if (!frame) break;  // playback ended
-    const { ansi, metrics } = anim.renderFrame(frame.frameIndex);
-    process.stdout.write(`\x1b[H${ansi}`);
-    await sleep(metrics.frameDelayMs);
-}
+anim.loop = true;
+anim.onFrame((frame) => process.stdout.write(`\x1b[H${frame.ansi}`));
+anim.play();          // internal timer honors per-frame delays
+// ...
+anim.pause();         // freeze on the current frame
+anim.goto(10);        // jump to frame 10 (emits an onFrame event)
 anim.close();
 ```
 
+Manual stepping (`next()` + `renderFrame()`) is also supported - `next()`
+emits `onFrame` events too. In kitty mode, animation frames reuse a single
+kitty image id (no per-frame image leak).
+
 ### ChafaVideo
 
-Plays MP4, MKV, WebM, AVI, and any other container FFmpeg supports. Requires FFmpeg shared libraries on the system (throws a descriptive error if missing).
+Plays MP4, MKV, WebM, AVI, and any other container FFmpeg supports. Requires
+FFmpeg shared libraries on the system (throws a descriptive error if missing).
+Frames are zero-copy views into the decoder ring buffer.
 
 ```ts
-const video = chafa.openVideo(fs.readFileSync("clip.mp4"), 320, 240);
+const video = chafa.openVideo(fs.readFileSync("clip.mp4"));
 // Metadata
 video.width; video.height; video.durationSec; video.fps;
 video.hasAudio; video.audioCodec; video.audioSampleRate; video.audioChannels;
 
-while (true) {
-    const frame = video.nextFrame();
-    if (!frame) break;
-    const { ansi } = chafa.renderRgba(frame.rgba, frame.width, frame.height);
-    process.stdout.write(`\x1b[H${ansi}`);
-    await sleep(frame.metrics.frameDelayMs);
-}
+// Integrated player: paced playback + onFrame events
+video.onFrame((frame) => {
+    process.stdout.write(`\x1b[H${chafa.renderRgba(frame.rgba, frame.width, frame.height).ansi}`);
+    // frame.audio is Float32Array PCM (needs videoIncludeAudio: 1)
+});
+video.play();         // paced to presentation timestamps
+video.pause();
+video.goto(42);       // seek + return the frame there
+const poster = video.thumbnail();  // first frame rendered via current config
+
+// Or iterate:
+for await (const frame of video) { /* ... */ }
+
 video.close();
+```
+
+With `videoIncludeAudio: 1` in the config, each frame carries `frame.audio`
+(interleaved float32 PCM covering the frame's timespan), `audioSamples`,
+`audioChannels`, and `audioSampleRate`. Audio decoding is off by default
+to save CPU and memory.
+
+### Terminal detection
+
+The constructor auto-detects capabilities from the environment (`$TERM`,
+`$KITTY_WINDOW_ID`, `$TERM_PROGRAM`, `$COLORTERM`) - kitty terminals get
+kitty pixel mode, truecolor terminals get truecolor, etc. Explicit config
+always wins. For a full active probe (pixel protocols, cell size, terminal
+dimensions), use `Chafa.detect()` or `chafa.autoDetect()`.
+
+```ts
+const info = await Chafa.detect();   // probes via escape sequences
+// { pixelMode: 2, cellW: 10, cellH: 20, termW: 120, termH: 40, ... }
 ```
 
 ### Using `using` (TypeScript 5.2+)
@@ -170,6 +209,7 @@ Key config fields:
 | `canvasMode` | number | 0 | `CanvasMode.TRUECOLOR` / `INDEXED_256` / ... |
 | `pixelMode` | number | 0 | `PixelMode.SYMBOLS` / `SIXELS` / `KITTY` / `ITERM2` |
 | `pixelFit` | number | 1 | `PixelFit.NONE` (hand pixels to chafa) / `SCALE` (pre-scale to fill `termW × cellW` × `termH × cellH`, default) |
+| `videoIncludeAudio` | number | 0 | Decode video audio into per-frame PCM (1 = on) |
 | `ditherMode` | number | 0 | `DitherMode.NONE` / `ORDERED` / `DIFFUSION` / `NOISE` |
 | `symbols` | string | "" | Chafa CLI selector string (e.g. `"block+border+space-wide"`) |
 | `fillSymbols` | string | "" | Fill symbol map selector string |

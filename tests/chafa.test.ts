@@ -253,7 +253,7 @@ describe("Metrics", () => {
     test("totalMs equals sum of parts", () => {
         const { metrics } = c.render(pngBuf);
         expect(metrics.totalMs).toBeCloseTo(
-            metrics.parseMs + metrics.drawMs + metrics.buildMs, 0
+            metrics.parseMs + metrics.scaleMs + metrics.drawMs + metrics.buildMs, 0
         );
     });
 
@@ -505,7 +505,7 @@ describe("Video", () => {
         expect(v.height).toBeGreaterThan(0);
         expect(v.fps).toBeGreaterThan(0);
         expect(typeof v.durationSec).toBe("number");
-        expect(typeof v.hasAudio).toBe("number");
+        expect(typeof v.hasAudio).toBe("boolean");
         expect(typeof v.audioCodec).toBe("string");
         v.close();
         c.destroy();
@@ -721,6 +721,318 @@ describe("Animation rapid seek", () => {
         anim.next(); anim.next();
         anim.rewind();
         anim.next();
+        anim.close();
+        c.destroy();
+    });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   Animation player: play / pause / goto / onFrame
+   ═══════════════════════════════════════════════════════════════════ */
+
+describe("Animation player", () => {
+    test("onFrame fires on manual next()", () => {
+        const c = new Chafa();
+        const anim = c.openAnimation(gifAnimBuf);
+        const seen: number[] = [];
+        const unsub = anim.onFrame((f) => seen.push(f.frameIndex));
+        anim.next();
+        anim.next();
+        expect(seen).toEqual([0, 1]);
+        unsub();
+        anim.next();
+        expect(seen).toEqual([0, 1]); // unsubscribed
+        anim.close();
+        c.destroy();
+    });
+
+    test("goto jumps to frame and emits rendered ansi", () => {
+        const c = new Chafa({ pixelMode: PixelMode.KITTY });
+        const anim = c.openAnimation(gifAnimBuf);
+        const events: any[] = [];
+        anim.onFrame((f) => events.push(f));
+        const r = anim.goto(3);
+        expect(r).not.toBeNull();
+        expect(r!.frameIndex).toBe(3);
+        expect(r!.ansi.startsWith("\x1b_G")).toBe(true);
+        expect(events.length).toBe(1);
+        expect(events[0].frameIndex).toBe(3);
+        expect(events[0].ansi).toBeDefined();
+        // next() continues from frame 4
+        expect(anim.next()!.frameIndex).toBe(4);
+        anim.close();
+        c.destroy();
+    });
+
+    test("goto out of range returns null", () => {
+        const c = new Chafa();
+        const anim = c.openAnimation(gifAnimBuf);
+        expect(anim.goto(anim.frameCount + 10)).toBeNull();
+        expect(anim.goto(-1)).toBeNull();
+        anim.close();
+        c.destroy();
+    });
+
+    test("play advances frames and pause freezes", async () => {
+        const c = new Chafa({ pixelMode: PixelMode.SIXELS });
+        const anim = c.openAnimation(gifAnimBuf);
+        let count = 0;
+        let sawAnsi = false;
+        anim.onFrame((f) => {
+            count++;
+            if (f.ansi?.startsWith("\x1bP")) sawAnsi = true;
+        });
+        anim.play();
+        expect(anim.playing).toBe(true);
+        await new Promise((r) => setTimeout(r, 400));
+        anim.pause();
+        expect(anim.playing).toBe(false);
+        expect(count).toBeGreaterThan(0);
+        expect(sawAnsi).toBe(true); // pixel-mode aware rendering during play
+        const frozen = count;
+        await new Promise((r) => setTimeout(r, 150));
+        expect(count).toBe(frozen); // paused: no more frames
+        anim.close();
+        c.destroy();
+    });
+
+    test("loop + play wraps past the end", async () => {
+        const c = new Chafa();
+        const anim = c.openAnimation(gifAnimBuf);
+        anim.loop = true;
+        const seen: number[] = [];
+        anim.onFrame((f) => seen.push(f.frameIndex));
+        anim.play();
+        // Play long enough to exceed one full loop
+        await new Promise((r) => setTimeout(r, 3000));
+        anim.pause();
+        expect(seen.length).toBeGreaterThan(anim.frameCount);
+        // indices must wrap (a later event smaller than an earlier one)
+        const wrapped = seen.some((v, i) => i > 0 && v < seen[i - 1]!);
+        expect(wrapped).toBe(true);
+        const loops = seen.filter((v) => v === 0).length;
+        expect(loops).toBeGreaterThan(1);
+        anim.close();
+        c.destroy();
+    });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   Video player: iterator / onFrame / play / goto / thumbnail / audio
+   ═══════════════════════════════════════════════════════════════════ */
+
+describe("Video player", () => {
+    let videoBuf: Buffer;
+    let audioBuf: Buffer;
+
+    beforeAll(() => {
+        try {
+            videoBuf = fs.readFileSync("playground/media/test.mp4");
+        } catch {
+            videoBuf = fs.readFileSync("playground/media/boykisser.mp4");
+        }
+        try {
+            audioBuf = fs.readFileSync("playground/media/test_audio.mp4");
+        } catch {
+            audioBuf = null as any;
+        }
+    });
+
+    const hasVideo = () => {
+        if (!videoBuf || videoBuf.length === 0) return false;
+        try {
+            const c = new Chafa();
+            const v = c.openVideo(videoBuf, 160, 120);
+            v.close();
+            c.destroy();
+            return true;
+        } catch {
+            return false;
+        }
+    };
+    const hasAudioVideo = () => {
+        if (!audioBuf || audioBuf.length === 0) return false;
+        try {
+            const c = new Chafa();
+            const v = c.openVideo(audioBuf, 160, 120);
+            v.close();
+            c.destroy();
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
+    test("async iterator yields frames", async () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        let n = 0;
+        for await (const f of v) {
+            expect(f.rgba.length).toBe(f.width * f.height * 4);
+            n++;
+            if (n >= 5) break;
+        }
+        expect(n).toBe(5);
+        v.close();
+        c.destroy();
+    });
+
+    test("onFrame fires on nextFrame and goto", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        const events: any[] = [];
+        const unsub = v.onFrame((f) => events.push(f));
+        const f1 = v.nextFrame();
+        expect(events.length).toBe(1);
+        expect(events[0].frameIndex).toBe(f1!.frameIndex);
+        const g = v.goto(1.0);
+        expect(g).not.toBeNull();
+        expect(events.length).toBe(2);
+        unsub();
+        v.nextFrame();
+        expect(events.length).toBe(2);
+        v.close();
+        c.destroy();
+    });
+
+    test("thumbnail renders with instance config", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa({ termW: 40, termH: 20, pixelMode: PixelMode.SIXELS });
+        const v = c.openVideo(videoBuf, 320, 240);
+        const t = v.thumbnail();
+        expect(t.ansi.startsWith("\x1bP")).toBe(true);
+        expect(t.width).toBe(320);
+        expect(t.height).toBe(240);
+        v.close();
+        c.destroy();
+    });
+
+    test("play toggles playing state and pauses", async () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        let frames = 0;
+        v.onFrame(() => frames++);
+        expect(v.playing).toBe(false);
+        v.play(4.0); // fast
+        expect(v.playing).toBe(true);
+        await new Promise((r) => setTimeout(r, 300));
+        v.pause();
+        expect(v.playing).toBe(false);
+        expect(frames).toBeGreaterThan(0);
+        v.close();
+        c.destroy();
+    });
+
+    test("videoIncludeAudio exposes per-frame PCM; default does not", () => {
+        if (!hasAudioVideo()) return;
+        // Default: no audio decode
+        {
+            const c = new Chafa();
+            const v = c.openVideo(audioBuf, 160, 120);
+            const f = v.nextFrame();
+            expect(f).not.toBeNull();
+            expect(f!.audio ?? null).toBeNull();
+            expect(f!.audioSamples).toBe(0);
+            v.close();
+            c.destroy();
+        }
+        // Opt-in: PCM samples covering the frame
+        {
+            const c = new Chafa({ videoIncludeAudio: 1 });
+            const v = c.openVideo(audioBuf, 160, 120);
+            expect(v.hasAudio).toBe(true);
+            expect(v.audioCodec.length).toBeGreaterThan(0);
+            const f = v.nextFrame();
+            expect(f).not.toBeNull();
+            expect(f!.audio).toBeInstanceOf(Float32Array);
+            expect(f!.audioSamples).toBeGreaterThan(0);
+            expect(f!.audioChannels).toBeGreaterThan(0);
+            expect(f!.audioSampleRate).toBeGreaterThan(0);
+            expect(f!.audio!.length).toBe(f!.audioSamples! * f!.audioChannels!);
+            // non-silent: 440Hz sine -> nonzero energy
+            let energy = 0;
+            for (let i = 0; i < f!.audio!.length; i++) energy += f!.audio![i]! ** 2;
+            expect(energy).toBeGreaterThan(0);
+            v.close();
+            c.destroy();
+        }
+    });
+
+    test("info() exposes status and audio metadata", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 160, 120);
+        const info = v.info();
+        expect(info.durationSec).toBeGreaterThan(0);
+        expect(info.fps).toBeGreaterThan(0);
+        expect(info.status).not.toBeNull();
+        expect(typeof info.status.frameIndex).toBe("number");
+        v.close();
+        c.destroy();
+    });
+});
+
+/* ═══════════════════════════════════════════════════════════════════
+   Terminal detection + instance info
+   ═══════════════════════════════════════════════════════════════════ */
+
+describe("Terminal detection", () => {
+    test("env auto-detect applies pixel mode for kitty terminals", () => {
+        const old = process.env.KITTY_WINDOW_ID;
+        process.env.KITTY_WINDOW_ID = "12345";
+        try {
+            const c = new Chafa();
+            expect(c.config.pixelMode).toBe(PixelMode.KITTY);
+            c.destroy();
+        } finally {
+            if (old === undefined) delete process.env.KITTY_WINDOW_ID;
+            else process.env.KITTY_WINDOW_ID = old;
+        }
+    });
+
+    test("explicit config wins over env detection", () => {
+        const old = process.env.KITTY_WINDOW_ID;
+        process.env.KITTY_WINDOW_ID = "12345";
+        try {
+            const c = new Chafa({ pixelMode: PixelMode.SIXELS });
+            expect(c.config.pixelMode).toBe(PixelMode.SIXELS);
+            c.destroy();
+        } finally {
+            if (old === undefined) delete process.env.KITTY_WINDOW_ID;
+            else process.env.KITTY_WINDOW_ID = old;
+        }
+    });
+
+    test("detect() falls back to env info in non-TTY", async () => {
+        const info = await Chafa.detect();
+        expect(info.probed).toBe(false);
+        expect(typeof info.pixelMode).toBe("number");
+        expect(typeof info.canvasMode).toBe("number");
+        expect(Array.isArray(info.pixelModes)).toBe(true);
+    });
+
+    test("chafa.info() exports config, features and last metrics", () => {
+        const c = new Chafa();
+        c.render(pngBuf);
+        const info = c.info();
+        expect(info.config.termW).toBe(80);
+        expect(typeof info.features).toBe("string");
+        expect(info.lastMetrics).not.toBeNull();
+        expect(info.lastMetrics!.totalMs).toBeGreaterThanOrEqual(0);
+        expect(typeof info.lastMetrics!.scaleMs).toBe("number");
+        c.destroy();
+    });
+
+    test("anim.info() exports playback state", () => {
+        const c = new Chafa();
+        const anim = c.openAnimation(gifAnimBuf);
+        const info = anim.info();
+        expect(info.frameCount).toBeGreaterThan(1);
+        expect(info.playing).toBe(false);
+        expect(info.loop).toBe(false);
         anim.close();
         c.destroy();
     });

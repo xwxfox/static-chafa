@@ -20,6 +20,7 @@ typedef struct
     int32_t max_frames;
     float speed;
     int32_t pixel_fit;
+    int32_t video_include_audio;
     char symbols[128];
     char fill_symbols[128];
 } CodecConfig;
@@ -33,6 +34,7 @@ typedef struct
     int32_t rgba_bytes;
     int32_t format, canvas_mode, pixel_mode, have_alpha;
     int32_t pixel_fit;
+    float scale_ms;
 } CodecMetrics;
 
 typedef struct CodecCtx CodecCtx;
@@ -258,6 +260,7 @@ static void read_config(napi_env env, napi_value obj, CodecConfig *cfg)
     if (read_int32(env, obj, "maxFrames", &iv)) cfg->max_frames = iv;
     if (read_double(env, obj, "speed", &dv)) cfg->speed = (float)dv;
     if (read_int32(env, obj, "pixelFit", &iv)) cfg->pixel_fit = iv;
+    if (read_int32(env, obj, "videoIncludeAudio", &iv)) cfg->video_include_audio = iv;
 
     read_string(env, obj, "symbols", cfg->symbols, sizeof(cfg->symbols));
     read_string(env, obj, "fillSymbols", cfg->fill_symbols, sizeof(cfg->fill_symbols));
@@ -280,6 +283,7 @@ static napi_value create_metrics(napi_env env, CodecMetrics *m)
     SET_DOUBLE("drawMs", draw_ms);
     SET_DOUBLE("buildMs", build_ms);
     SET_DOUBLE("totalMs", total_ms);
+    SET_DOUBLE("scaleMs", scale_ms);
     SET_INT("imgW", img_w);
     SET_INT("imgH", img_h);
     SET_INT("canvasW", canvas_w);
@@ -654,13 +658,41 @@ extern int32_t codec_video_open(CodecCtx *ctx, char *data, int32_t len,
 extern int32_t codec_video_next(CodecCtx *ctx, int32_t handle,
     uint8_t *out_rgba, int32_t out_cap, int32_t *out_w, int32_t *out_h,
     double *out_pts, CodecMetrics *out,
-    uint8_t **out_frame_ptr, int32_t *out_frame_size);
+    uint8_t **out_frame_ptr, int32_t *out_frame_size,
+    float **out_audio, int32_t *out_audio_samples,
+    int32_t *out_audio_channels, int32_t *out_audio_rate);
 extern int32_t codec_video_seek(CodecCtx *ctx, int32_t handle, double target_sec);
 extern int32_t codec_video_info(CodecCtx *ctx, int32_t handle,
     int32_t *out_w, int32_t *out_h, double *out_duration, double *out_fps,
     int32_t *out_has_audio, char *audio_codec, int32_t *audio_rate, int32_t *audio_ch);
+extern int32_t codec_video_thumbnail(CodecCtx *ctx, int32_t handle,
+    uint8_t *out_rgba, int32_t out_cap, int32_t *out_w, int32_t *out_h);
+extern int32_t codec_video_thumb_size(CodecCtx *ctx, int32_t handle,
+    int32_t *out_w, int32_t *out_h);
 extern void codec_video_close(CodecCtx *ctx, int32_t handle);
+extern void codec_video_play(CodecCtx *ctx, int32_t handle, double speed);
+extern void codec_video_pause(CodecCtx *ctx, int32_t handle);
 extern const char *codec_video_error(void);
+extern int32_t codec_anim_goto(CodecCtx *ctx, int32_t handle, int32_t frame_idx);
+
+/* -- VideoStatus mirror (must match codec_video.c byte-for-byte) -- */
+typedef struct
+{
+    int32_t frame_index;
+    double pts_sec;
+    double duration_sec;
+    double playback_elapsed_sec;
+    double progress;
+    int32_t playing;
+    int32_t eof;
+    int32_t decode_w, decode_h;
+    int32_t src_w, src_h;
+    int32_t has_audio;
+    char audio_codec[32];
+    int32_t audio_sample_rate;
+    int32_t audio_channels;
+} VideoStatus;
+extern int32_t codec_video_status(CodecCtx *ctx, int32_t handle, VideoStatus *out);
 
 /* -- chafaVideoOpen(ctx, buffer, decodeW, decodeH) -> { handle, metrics } -- */
 static napi_value chafa_video_open(napi_env env, napi_callback_info info)
@@ -698,9 +730,10 @@ static napi_value chafa_video_open(napi_env env, napi_callback_info info)
     return result;
 }
 
-/* -- chafaVideoNext(ctx, handle) -> { rgba: Buffer, w, h, ptsSec, frameIndex, metrics } -- */
-/* Zero-copy: rgba is a view into the decoder ring buffer. Valid until the
-   next videoNext()/seek()/close() call on the same video. */
+/* -- chafaVideoNext(ctx, handle) -> { rgba, audio, w, h, ptsSec, frameIndex,
+      audioSampleRate, audioChannels, metrics } | null -- */
+/* Zero-copy: rgba and audio are views into decoder-owned buffers. Valid until
+   the next videoNext()/seek()/close() call on the same video. */
 static napi_value chafa_video_next(napi_env env, napi_callback_info info)
 {
     size_t argc = 2;
@@ -718,8 +751,12 @@ static napi_value chafa_video_next(napi_env env, napi_callback_info info)
     CodecMetrics m;
     uint8_t *frame_ptr = NULL;
     int32_t frame_size = 0;
+    float *audio_ptr = NULL;
+    int32_t audio_samples = 0, audio_channels = 0, audio_rate = 0;
     int32_t idx = codec_video_next(ctx, handle, NULL, 0, &w, &h, &pts, &m,
-                                   &frame_ptr, &frame_size);
+                                   &frame_ptr, &frame_size,
+                                   &audio_ptr, &audio_samples,
+                                   &audio_channels, &audio_rate);
     if (idx < 0) {
         napi_value nul; napi_get_null(env, &nul); return nul;
     }
@@ -744,6 +781,20 @@ static napi_value chafa_video_next(napi_env env, napi_callback_info info)
     }
     napi_set_named_property(env, result, "rgba", buf_val);
 
+    /* Audio: zero-copy view into the PCM FIFO when present */
+    if (audio_ptr && audio_samples > 0 && audio_channels > 0)
+    {
+        size_t afloat = (size_t)audio_samples * (size_t)audio_channels;
+        napi_create_external_buffer(env, afloat * sizeof(float), (uint8_t *)audio_ptr,
+                                    NULL, NULL, &buf_val);
+        napi_set_named_property(env, result, "audio", buf_val);
+    }
+    else
+    {
+        napi_get_null(env, &buf_val);
+        napi_set_named_property(env, result, "audio", buf_val);
+    }
+
     napi_create_int32(env, w, &val);
     napi_set_named_property(env, result, "width", val);
     napi_create_int32(env, h, &val);
@@ -752,8 +803,151 @@ static napi_value chafa_video_next(napi_env env, napi_callback_info info)
     napi_set_named_property(env, result, "ptsSec", val);
     napi_create_int32(env, idx, &val);
     napi_set_named_property(env, result, "frameIndex", val);
+    napi_create_int32(env, audio_samples, &val);
+    napi_set_named_property(env, result, "audioSamples", val);
+    napi_create_int32(env, audio_channels, &val);
+    napi_set_named_property(env, result, "audioChannels", val);
+    napi_create_int32(env, audio_rate, &val);
+    napi_set_named_property(env, result, "audioSampleRate", val);
     napi_set_named_property(env, result, "metrics", create_metrics(env, &m));
 
+    return result;
+}
+
+/* -- chafaVideoThumbnail(ctx, handle) -> { rgba, width, height } -- */
+static napi_value chafa_video_thumbnail(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+    int32_t handle;
+    napi_get_value_int32(env, argv[1], &handle);
+
+    int32_t w = 0, h = 0;
+    /* Allocate exactly the cached frame size instead of a 256MB worst case */
+    int32_t bytes = codec_video_thumb_size(ctx, handle, &w, &h);
+    if (bytes <= 0) { napi_throw_error(env, NULL, "Thumbnail unavailable"); return NULL; }
+
+    uint8_t *rgba = malloc((size_t)bytes);
+    if (!rgba) { napi_throw_error(env, NULL, "malloc failed"); return NULL; }
+
+    if (codec_video_thumbnail(ctx, handle, rgba, bytes, &w, &h) < 0)
+    {
+        free(rgba);
+        napi_throw_error(env, NULL, "Thumbnail unavailable");
+        return NULL;
+    }
+
+    napi_value result, val, buf_val;
+    napi_create_object(env, &result);
+    napi_create_external_buffer(env, (size_t)h * (size_t)w * 4, rgba,
+                                rgba_buffer_finalize, NULL, &buf_val);
+    napi_set_named_property(env, result, "rgba", buf_val);
+    napi_create_int32(env, w, &val);
+    napi_set_named_property(env, result, "width", val);
+    napi_create_int32(env, h, &val);
+    napi_set_named_property(env, result, "height", val);
+    return result;
+}
+
+/* -- chafaVideoPlay(ctx, handle, speed) -- */
+static napi_value chafa_video_play(napi_env env, napi_callback_info info)
+{
+    size_t argc = 3;
+    napi_value argv[3];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+    int32_t handle;
+    double speed = 1.0;
+    napi_get_value_int32(env, argv[1], &handle);
+    napi_get_value_double(env, argv[2], &speed);
+    codec_video_play(ctx, handle, speed);
+    return NULL;
+}
+
+/* -- chafaVideoPause(ctx, handle) -- */
+static napi_value chafa_video_pause(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+    int32_t handle;
+    napi_get_value_int32(env, argv[1], &handle);
+    codec_video_pause(ctx, handle);
+    return NULL;
+}
+
+/* -- chafaVideoStatus(ctx, handle) -> VideoStatus -- */
+static napi_value chafa_video_status(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+    int32_t handle;
+    napi_get_value_int32(env, argv[1], &handle);
+
+    VideoStatus st;
+    if (codec_video_status(ctx, handle, &st) < 0)
+    {
+        napi_value nul; napi_get_null(env, &nul); return nul;
+    }
+
+    napi_value result, val;
+    napi_create_object(env, &result);
+#define SETI(k, f) napi_create_int32(env, st.f, &val); napi_set_named_property(env, result, k, val);
+#define SETD(k, f) napi_create_double(env, st.f, &val); napi_set_named_property(env, result, k, val);
+    SETI("frameIndex", frame_index);
+    SETD("ptsSec", pts_sec);
+    SETD("durationSec", duration_sec);
+    SETD("playbackElapsedSec", playback_elapsed_sec);
+    SETD("progress", progress);
+    SETI("playing", playing);
+    SETI("eof", eof);
+    SETI("decodeW", decode_w);
+    SETI("decodeH", decode_h);
+    SETI("srcW", src_w);
+    SETI("srcH", src_h);
+    SETI("hasAudio", has_audio);
+    napi_create_string_utf8(env, st.audio_codec, NAPI_AUTO_LENGTH, &val);
+    napi_set_named_property(env, result, "audioCodec", val);
+    SETI("audioSampleRate", audio_sample_rate);
+    SETI("audioChannels", audio_channels);
+#undef SETI
+#undef SETD
+    return result;
+}
+
+/* -- chafaAnimGoto(ctx, handle, frameIndex) -> 0 | -1 -- */
+static napi_value chafa_anim_goto(napi_env env, napi_callback_info info)
+{
+    size_t argc = 3;
+    napi_value argv[3];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+    int32_t handle, frame_idx;
+    napi_get_value_int32(env, argv[1], &handle);
+    napi_get_value_int32(env, argv[2], &frame_idx);
+
+    napi_value result;
+    napi_create_int32(env, codec_anim_goto(ctx, handle, frame_idx), &result);
     return result;
 }
 
@@ -863,11 +1057,16 @@ napi_value Init(napi_env env, napi_value exports)
     EXPORT("chafaAnimRewind", chafa_anim_rewind);
     EXPORT("chafaAnimClose", chafa_anim_close);
     EXPORT("chafaAnimAbort", chafa_anim_abort);
+    EXPORT("chafaAnimGoto", chafa_anim_goto);
     EXPORT("chafaVideoOpen", chafa_video_open);
     EXPORT("chafaVideoNext", chafa_video_next);
     EXPORT("chafaVideoInfo", chafa_video_info);
     EXPORT("chafaVideoSeek", chafa_video_seek);
     EXPORT("chafaVideoClose", chafa_video_close);
+    EXPORT("chafaVideoThumbnail", chafa_video_thumbnail);
+    EXPORT("chafaVideoPlay", chafa_video_play);
+    EXPORT("chafaVideoPause", chafa_video_pause);
+    EXPORT("chafaVideoStatus", chafa_video_status);
     return exports;
 }
 

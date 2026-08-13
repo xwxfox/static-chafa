@@ -161,6 +161,7 @@ typedef struct
     int32_t max_frames;
     float speed;
     int32_t pixel_fit;
+    int32_t video_include_audio;
     char symbols[128];
     char fill_symbols[128];
 } CodecConfig;
@@ -182,6 +183,7 @@ typedef struct
     int32_t rgba_bytes;
     int32_t format, canvas_mode, pixel_mode, have_alpha;
     int32_t pixel_fit;
+    float scale_ms;
 } CodecMetrics;
 
 /* -- decode helpers -- */
@@ -310,16 +312,47 @@ static int decode_jpeg(uint8_t **out, int *out_w, int *out_h, const uint8_t *buf
     JSAMPARRAY rowbuf = (*cinfo.mem->alloc_sarray)((j_common_ptr)&cinfo, JPOOL_IMAGE, rs, 1);
     uint8_t *rgba = malloc(w * h * 4);
     if (!rgba) { jpeg_destroy_decompress(&cinfo); return -1; }
-    for (int y = 0; y < h; y++)
+    if (cinfo.output_components == 3)
     {
-        jpeg_read_scanlines(&cinfo, rowbuf, 1);
-        for (int x = 0; x < w; x++)
+        /* Fast path for the common 3-component case: unrolled 4-pixel
+           conversion (decoder output dominates, but the tighter loop keeps
+           the conversion overhead off the critical path). */
+        for (int y = 0; y < h; y++)
         {
-            int d = (y * w + x) * 4, s = x * cinfo.output_components;
-            rgba[d] = rowbuf[0][s];
-            rgba[d + 1] = rowbuf[0][s + 1];
-            rgba[d + 2] = rowbuf[0][s + 2];
-            rgba[d + 3] = 255;
+            jpeg_read_scanlines(&cinfo, rowbuf, 1);
+            const uint8_t *s = rowbuf[0];
+            uint8_t *d = rgba + (size_t)y * (size_t)w * 4;
+            int x = 0;
+            for (; x + 4 <= w; x += 4)
+            {
+                d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 255;
+                d[4] = s[3]; d[5] = s[4]; d[6] = s[5]; d[7] = 255;
+                d[8] = s[6]; d[9] = s[7]; d[10] = s[8]; d[11] = 255;
+                d[12] = s[9]; d[13] = s[10]; d[14] = s[11]; d[15] = 255;
+                d += 16;
+                s += 12;
+            }
+            for (; x < w; x++)
+            {
+                d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = 255;
+                d += 4;
+                s += 3;
+            }
+        }
+    }
+    else
+    {
+        for (int y = 0; y < h; y++)
+        {
+            jpeg_read_scanlines(&cinfo, rowbuf, 1);
+            for (int x = 0; x < w; x++)
+            {
+                int d = (y * w + x) * 4, s = x * cinfo.output_components;
+                rgba[d] = rowbuf[0][s];
+                rgba[d + 1] = rowbuf[0][s + 1];
+                rgba[d + 2] = rowbuf[0][s + 2];
+                rgba[d + 3] = 255;
+            }
         }
     }
     jpeg_finish_decompress(&cinfo);
@@ -559,6 +592,10 @@ CODEC_EXPORT int32_t codec_ctx_get_pixel_fit(CodecCtx *ctx)
 {
     return ctx ? ctx->cfg.pixel_fit : 0;
 }
+CODEC_EXPORT int32_t codec_ctx_get_video_include_audio(CodecCtx *ctx)
+{
+    return ctx ? ctx->cfg.video_include_audio : 0;
+}
 /** @} */
 
 /** @name Video (FFmpeg, optional - fails gracefully without FFmpeg installed) @{ */
@@ -638,16 +675,19 @@ CODEC_EXPORT void codec_ctx_pixel_fit_box(const CodecCtx *ctx, int src_w, int sr
 }
 
 /* Pre-scale src RGBA into @scratch at the canvas fit box. Returns pointer
-   to the pixels to draw and their dims/stride. On failure returns original. */
+   to the pixels to draw and their dims/stride. On failure returns original.
+   Sets *did_scale = 1 when a scale was actually performed. */
 static void prescale_if_needed(const ChafaCanvas *canvas, int pixel_fit,
                                uint8_t *rgba, int w, int h, int stride,
                                ScaleScratch *scratch,
-                               uint8_t **draw_out, int *draw_w, int *draw_h, int *draw_stride)
+                               uint8_t **draw_out, int *draw_w, int *draw_h, int *draw_stride,
+                               int *did_scale)
 {
     *draw_out = rgba;
     *draw_w = w;
     *draw_h = h;
     *draw_stride = stride > 0 ? stride : w * 4;
+    *did_scale = 0;
 
     if (!canvas || !rgba || pixel_fit != PIXEL_FIT_SCALE)
         return;
@@ -685,6 +725,7 @@ static void prescale_if_needed(const ChafaCanvas *canvas, int pixel_fit,
     *draw_w = fw;
     *draw_h = fh;
     *draw_stride = fw * 4;
+    *did_scale = 1;
 }
 
 /* Insert "i=<id>," after every kitty image/chunk prefix ("\x1b_G") so
@@ -825,26 +866,70 @@ static char *canvas_draw_and_build(ChafaCanvas *canvas, uint8_t *rgba,
 {
     double t0 = now_ms();
     uint8_t *draw_pixels;
-    int draw_w, draw_h, draw_stride;
+    int draw_w, draw_h, draw_stride, did_scale;
     prescale_if_needed(canvas, pixel_fit, rgba, w, h, stride, scratch,
-                       &draw_pixels, &draw_w, &draw_h, &draw_stride);
+                       &draw_pixels, &draw_w, &draw_h, &draw_stride, &did_scale);
+    double t_pre = now_ms();
     chafa_canvas_draw_all_pixels(canvas, CHAFA_PIXEL_RGBA8_UNASSOCIATED,
                                  draw_pixels, draw_w, draw_h, draw_stride);
     double t1 = now_ms();
     GString *gs = chafa_canvas_print(canvas, NULL);
     double t2 = now_ms();
 
-    m->draw_ms = (float)(t1 - t0);
+    m->scale_ms = did_scale ? (float)(t_pre - t0) : 0.0f;
+    m->draw_ms = (float)(t1 - t_pre);
     m->build_ms = (float)(t2 - t1);
-    m->total_ms = m->parse_ms + m->draw_ms + m->build_ms;
+    m->total_ms = m->parse_ms + m->scale_ms + m->draw_ms + m->build_ms;
     m->img_w = w;
     m->img_h = h;
     fill_canvas_metrics(canvas, m);
     m->pixel_fit = pixel_fit;
 
-    char *result = strdup(gs->str);
-    g_string_free(gs, 1);
-    return result;
+    /* Hand the GString's buffer over instead of copying it. The vendored
+       glib_mini GString allocates with malloc/realloc, so the caller's
+       codec_free() (free) is compatible. */
+    return g_string_free(gs, 0);
+}
+
+/* Fast integer append (avoids snprintf per cell - the previous
+   g_string_append_printf approach was a major cost for large matrices). */
+static void gstr_append_uint(GString *gs, guint32 v)
+{
+    char buf[16];
+    char *p = buf + sizeof(buf);
+    do
+    {
+        *--p = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    g_string_append_len(gs, p, (gssize)(buf + sizeof(buf) - p));
+}
+
+static void gstr_append_int(GString *gs, gint32 v)
+{
+    char buf[16];
+    char *p = buf + sizeof(buf);
+    guint32 u;
+    if (v < 0)
+    {
+        u = (guint32)(-(v + 1)) + 1u;
+        do
+        {
+            *--p = (char)('0' + u % 10);
+            u /= 10;
+        } while (u);
+        *--p = '-';
+    }
+    else
+    {
+        u = (guint32)v;
+        do
+        {
+            *--p = (char)('0' + u % 10);
+            u /= 10;
+        } while (u);
+    }
+    g_string_append_len(gs, p, (gssize)(buf + sizeof(buf) - p));
 }
 
 /* Build a JSON matrix string from canvas cells.
@@ -873,15 +958,19 @@ static char *canvas_build_matrix(ChafaCanvas *canvas, CodecMetrics *m)
             gunichar c = chafa_canvas_get_char_at(canvas, x, y);
             chafa_canvas_get_raw_colors_at(canvas, x, y, &fg, &bg);
             if (x > 0) g_string_append_c(gs, ',');
-            g_string_append_printf(gs, "[%u,%d,%d]", (unsigned)c, fg, bg);
+            g_string_append_c(gs, '[');
+            gstr_append_uint(gs, (guint32)c);
+            g_string_append_c(gs, ',');
+            gstr_append_int(gs, fg);
+            g_string_append_c(gs, ',');
+            gstr_append_int(gs, bg);
+            g_string_append_c(gs, ']');
         }
         g_string_append_c(gs, ']');
     }
     g_string_append_c(gs, ']');
 
-    char *result = strdup(gs->str);
-    g_string_free(gs, 1);
-    return result;
+    return g_string_free(gs, 0);
 }
 
 /* -- Decode a buffer into RGBA pixels -- */
@@ -972,6 +1061,10 @@ CODEC_EXPORT void codec_ctx_free(CodecCtx *ctx)
 CODEC_EXPORT void codec_ctx_configure(CodecCtx *ctx, CodecConfig *cfg)
 {
     if (!ctx || !cfg) return;
+    /* No-op update: keep the cached canvas (avoids a full rebuild on
+       repeated configure calls with identical settings). */
+    if (memcmp(&ctx->cfg, cfg, sizeof(CodecConfig)) == 0)
+        return;
     memcpy(&ctx->cfg, cfg, sizeof(CodecConfig));
     ctx->canvas_valid = 0;
 }
@@ -1546,6 +1639,71 @@ CODEC_EXPORT void codec_anim_abort(CodecCtx *ctx, int32_t handle)
     if (!ctx || handle < 0 || handle >= 16 || !ctx->handles[handle])
         return;
     ctx->handles[handle]->aborted = 1;
+}
+
+/* Jump to an absolute frame index. GIF: O(1). WebP: decoder rewind + skip.
+   After a successful goto, frame @frame_idx is "current": render_frame() can
+   render it and the next codec_anim_next() returns frame_idx + 1.
+   Returns 0 on success, -1 on invalid index. */
+CODEC_EXPORT int32_t codec_anim_goto(CodecCtx *ctx, int32_t handle, int32_t frame_idx)
+{
+    if (!ctx || handle < 0 || handle >= 16 || !ctx->handles[handle])
+        return -1;
+    AnimHandle *h = ctx->handles[handle];
+    if (frame_idx < 0)
+        return -1;
+
+    if (h->type == ANIM_GIF)
+    {
+        if (frame_idx >= h->total_frames)
+            return -1;
+        h->idx = frame_idx + 1;
+        h->aborted = 0;
+        return 0;
+    }
+
+    if (h->type == ANIM_WEBP)
+    {
+        /* Recreate the decoder and skip forward through the target frame */
+        WebPAnimDecoderDelete(h->webp_dec);
+        WebPData wpd = { h->webp_buf, (size_t)h->webp_len };
+        WebPAnimDecoderOptions opts;
+        WebPAnimDecoderOptionsInit(&opts);
+        opts.color_mode = MODE_RGBA;
+        h->webp_dec = WebPAnimDecoderNew(&wpd, &opts);
+        if (!h->webp_dec) return -1;
+
+        h->idx = 0;
+        h->done = 0;
+        h->prev_ts = 0;
+        h->aborted = 0;
+
+        while (h->idx <= frame_idx && !h->done)
+        {
+            uint8_t *fbuf;
+            int ts;
+            if (!WebPAnimDecoderGetNext(h->webp_dec, &fbuf, &ts))
+            {
+                h->done = 1;
+                break;
+            }
+            int offset = h->idx * h->frame_size;
+            if (offset + h->frame_size > 256 * 1024 * 1024)
+            {
+                h->done = 1;
+                break;
+            }
+            memcpy(h->rgbabuf + offset, fbuf, h->frame_size);
+            int delta = ts - h->prev_ts;
+            if (delta < 0) delta = h->delays ? h->delays[0] : 100;
+            h->delays[h->idx] = delta;
+            h->prev_ts = ts;
+            h->idx++;
+        }
+        return h->done ? -1 : 0;
+    }
+
+    return -1;
 }
 
 CODEC_EXPORT void codec_free(void *p)
