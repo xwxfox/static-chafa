@@ -9,7 +9,7 @@ const DitherMode: {
 };
 ```
 
-Defined in: [types.ts:66](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L66)
+Defined in: [types.ts:66](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L66)
 
 Chafa dithering modes.
 
@@ -22,7 +22,7 @@ Chafa dithering modes.
 
 | Name | Type | Default value | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="property-diffusion"></a> `DIFFUSION` | `2` | `2` | [types.ts:69](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L69) |
-| <a id="property-noise"></a> `NOISE` | `3` | `3` | [types.ts:70](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L70) |
-| <a id="property-none"></a> `NONE` | `0` | `0` | [types.ts:67](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L67) |
-| <a id="property-ordered"></a> `ORDERED` | `1` | `1` | [types.ts:68](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L68) |
+| <a id="property-diffusion"></a> `DIFFUSION` | `2` | `2` | [types.ts:69](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L69) |
+| <a id="property-noise"></a> `NOISE` | `3` | `3` | [types.ts:70](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L70) |
+| <a id="property-none"></a> `NONE` | `0` | `0` | [types.ts:67](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L67) |
+| <a id="property-ordered"></a> `ORDERED` | `1` | `1` | [types.ts:68](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L68) |

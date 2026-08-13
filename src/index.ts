@@ -58,6 +58,7 @@ export {
     ColorExtractor,
     ColorSpace,
     Passthrough,
+    SwsScale,
     defaultConfig,
     pixelCanvasSize,
 } from "./types.ts";
@@ -253,6 +254,19 @@ export class ChafaAnimation {
     rewind(): void {
         if (this.#closed) return;
         native.chafaAnimRewind(this.#ctx, this.#handle);
+    }
+
+    /**
+     * Raw RGBA pixels of a decoded frame (zero-copy view into the frame
+     * pool, valid until the next anim call or `close()`). `null` when the
+     * frame hasn't been decoded yet. Used by the tuning harness for
+     * ground-truth comparisons.
+     */
+    frameData(frameIndex: number): Uint8Array | null {
+        if (this.#closed) return null;
+        const buf = native.chafaAnimFrameData(this.#ctx, this.#handle, frameIndex);
+        if (!buf) return null;
+        return new Uint8Array(buf.buffer, buf.byteOffset, this.width * this.height * 4);
     }
 
     /**
@@ -653,7 +667,7 @@ function termQueries(
         const results: string[] = new Array<string>(queries.length).fill("");
         const pending = new Map<number, (buf: Buffer) => number>();
         queries.forEach((q, i) => pending.set(i, q.terminator));
-        let buf = Buffer.alloc(0);
+        let buf: Buffer = Buffer.alloc(0);
         let done = false;
         /* Preserve the caller's raw-mode state (e.g. an app with its own
            keyboard handling running alongside the probe). */
@@ -759,7 +773,7 @@ async function probeTerminal(timeoutMs = 300): Promise<import("./types.ts").Term
         },
     ], timeoutMs);
 
-    if (kittyResp.includes("OK")) {
+    if (kittyResp?.includes("OK")) {
         info.pixelModes.push(PixelMode.KITTY);
         info.probed = true;
     }
@@ -781,7 +795,7 @@ async function probeTerminal(timeoutMs = 300): Promise<import("./types.ts").Term
                 query: "\x1b[18t",
                 terminator: (b) => b.includes("\x1b[8;") ? b.indexOf("\x1b[8;") : -1,
             }], timeoutMs);
-            const mc = /\[8;(\d+);(\d+)t/.exec(cells);
+            const mc = /\[8;(\d+);(\d+)t/.exec(cells ?? "");
             if (mc) {
                 info.termH = +mc[1]!;
                 info.termW = +mc[2]!;
@@ -1109,6 +1123,26 @@ export class Chafa {
     /* ════ Lifecycle ════ */
 
     /**
+     * Coverage bitmaps for glyphs in the active symbol map (8 bytes per
+     * codepoint: 8 rows of 8 bits, LSB = leftmost pixel, 1 = glyph pixel).
+     * Uses the exact symbol map the renderer uses, so the returned bitmaps
+     * rasterize symbol-mode output faithfully (used by the tuning harness).
+     *
+     * @param charCodes Codepoints to look up.
+     * @returns Uint8Array of `charCodes.length * 8` bytes.
+     */
+    symbolGlyphs(charCodes: number[] | Uint32Array): Uint8Array {
+        this.#ensureAlive();
+        const u32 = charCodes instanceof Uint32Array
+            ? charCodes
+            : Uint32Array.from(charCodes);
+        const buf = Buffer.from(u32.buffer, u32.byteOffset, u32.byteLength);
+        const out = native.chafaSymbolGlyphs(this.#ctx, buf);
+        if (!out) return new Uint8Array(u32.length * 8);
+        return new Uint8Array(out.buffer, out.byteOffset, u32.length * 8);
+    }
+
+    /**
      * Free all native resources (canvas, pending animations).
      * After calling this, the instance is permanently unusable.
      *
@@ -1140,6 +1174,16 @@ export class Chafa {
     static supportedFeatures(): string {
         try { return native.chafaFeatures?.() ?? ""; }
         catch { return ""; }
+    }
+
+    /**
+     * Set the number of worker threads chafa's internal batch processors
+     * may spawn (per-process global). Defaults to the CPU count. Lower it
+     * when many renderer processes/workers run in parallel to avoid
+     * oversubscription (the tuner uses this).
+     */
+    static setThreads(n: number): void {
+        try { native.chafaSetThreads?.(Math.max(1, n | 0)); } catch {}
     }
 
     /**

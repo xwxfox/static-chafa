@@ -87,6 +87,8 @@ extern void codec_ctx_pixel_fit_box(const CodecCtx *ctx, int src_w, int src_h,
                                     int *w_out, int *h_out);
 extern int32_t codec_ctx_get_pixel_fit(CodecCtx *ctx);
 extern int32_t codec_ctx_get_video_include_audio(CodecCtx *ctx);
+extern int32_t codec_ctx_get_video_threads(CodecCtx *ctx);
+extern int32_t codec_ctx_get_sws_scale(CodecCtx *ctx);
 
 /* Error codes from codec.c */
 #define ERR_OK 0
@@ -497,6 +499,15 @@ CODEC_EXPORT int codec_video_open(CodecCtx *ctx, char *data, int32_t len,
     if (!vh->codec_ctx) goto err;
 
     if (ff.avcodec_parameters_to_context(vh->codec_ctx, vpar) < 0) goto err;
+
+    /* Decode thread count (0 = FFmpeg auto). Must be set before open2 -
+       the thread pool is allocated there. */
+    {
+        int32_t threads = codec_ctx_get_video_threads(ctx);
+        if (threads >= 0)
+            vh->codec_ctx->thread_count = threads;
+    }
+
     if (ff.avcodec_open2(vh->codec_ctx, codec, NULL) < 0) goto err;
 
     vh->frame = ff.av_frame_alloc();
@@ -544,11 +555,18 @@ CODEC_EXPORT int codec_video_open(CodecCtx *ctx, char *data, int32_t len,
         vh->fps = (double)vstr->nb_frames / vh->duration_sec;
     if (vh->fps <= 0) vh->fps = 30.0;
 
-    /* SwsContext for YUV->RGBA + optional downscale. FAST_BILINEAR when
-       downscaling (visually nearly identical, ~2x faster than BILINEAR),
-       BILINEAR otherwise. */
-    int sws_flags = (vh->decode_w < vh->src_w || vh->decode_h < vh->src_h)
-        ? SWS_FAST_BILINEAR : SWS_BILINEAR;
+    /* SwsContext for YUV->RGBA + optional downscale. Flag from config
+       (0 = auto: FAST_BILINEAR when downscaling, BILINEAR otherwise). */
+    int sws_flags;
+    switch (codec_ctx_get_sws_scale(ctx))
+    {
+        case 1:  sws_flags = SWS_BILINEAR; break;
+        case 2:  sws_flags = SWS_POINT; break;
+        case 3:  sws_flags = SWS_AREA; break;
+        case 4:  sws_flags = SWS_FAST_BILINEAR; break;
+        default: sws_flags = (vh->decode_w < vh->src_w || vh->decode_h < vh->src_h)
+                             ? SWS_FAST_BILINEAR : SWS_BILINEAR; break;
+    }
     vh->sws_ctx = ff.sws_getContext(
         vh->src_w, vh->src_h, vpar->format,
         vh->decode_w, vh->decode_h, AV_PIX_FMT_RGBA,

@@ -124,7 +124,7 @@ describe("Pixel modes - animation", () => {
             const { ansi } = anim.renderFrame(frame.frameIndex);
             const m = /i=(\d+)/.exec(ansi);
             expect(m).not.toBeNull();
-            ids.add(m![1]);
+            ids.add(m![1]!);
         }
         expect(ids.size).toBe(1); // one stable id across frames
         anim.close();

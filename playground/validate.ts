@@ -3,7 +3,7 @@ import { createContext, destroyContext, render, type CodecMetrics } from "../src
 
 const imagePath = "playground/media/fox.png";
 const buf = new Uint8Array(fs.readFileSync(imagePath));
-const MODE: "validate" | "build" = "validate";
+const MODE: "validate" | "build" = (process.argv[2] as "validate" | "build") || "validate";
 
 const size_pairs = [
     { h: 1080, w: 1920 },

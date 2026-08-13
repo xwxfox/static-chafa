@@ -1,6 +1,6 @@
 {
   "name": "static-chafa",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Zero-dependency terminal image rendering - static & animated images to ANSI art",
   "license": "MIT",
   "type": "module",
@@ -42,10 +42,10 @@
     "play:video": "bun run playground/video.ts"
   },
   "optionalDependencies": {
-    "@static-chafa/linux-x64": "1.0.7",
-    "@static-chafa/linux-arm64": "1.0.7",
-    "@static-chafa/darwin-arm64": "1.0.7",
-    "@static-chafa/win32-x64": "1.0.7"
+    "@static-chafa/linux-x64": "1.0.8",
+    "@static-chafa/linux-arm64": "1.0.8",
+    "@static-chafa/darwin-arm64": "1.0.8",
+    "@static-chafa/win32-x64": "1.0.8"
   },
   "files": [
     "dist/"

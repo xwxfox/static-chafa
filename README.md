@@ -210,6 +210,8 @@ Key config fields:
 | `pixelMode` | number | 0 | `PixelMode.SYMBOLS` / `SIXELS` / `KITTY` / `ITERM2` |
 | `pixelFit` | number | 1 | `PixelFit.NONE` (hand pixels to chafa) / `SCALE` (pre-scale to fill `termW × cellW` × `termH × cellH`, default) |
 | `videoIncludeAudio` | number | 0 | Decode video audio into per-frame PCM (1 = on) |
+| `videoThreads` | number | 0 | FFmpeg decoder thread count (0 = auto) |
+| `swsScale` | number | 0 | FFmpeg scaler: `SwsScale.AUTO` / `BILINEAR` / `POINT` / `AREA` / `FAST_BILINEAR` |
 | `ditherMode` | number | 0 | `DitherMode.NONE` / `ORDERED` / `DIFFUSION` / `NOISE` |
 | `symbols` | string | "" | Chafa CLI selector string (e.g. `"block+border+space-wide"`) |
 | `fillSymbols` | string | "" | Fill symbol map selector string |
@@ -262,6 +264,33 @@ bun run test          # Run 38 tests
 bun run bench         # Run comprehensive benchmark
 bun run docs          # Generate API docs
 bun run playground    # Interactive test suite
+```
+
+### Tuning harness
+
+`playground/harness.ts` renders media frames with full per-stage timings and
+pixel-compares every output against ground truth (PSNR/SSIM), emitting PNGs
+(ground truth, reference, symbols raster, decoded sixel/kitty) plus
+`metrics.json`:
+
+```bash
+bun run playground/harness.ts render fox.png --mode all --frames 10
+bun run playground/harness.ts tune fox.png --frames 5        # ranked 1-D sweep
+```
+
+`playground/tuner.ts` runs a long-horizon automatic optimizer: 15 concurrent
+processes (5 terminal sizes x symbols/sixel/kitty) continuously sampling the
+full chafa + FFmpeg config space (workFactor, dithering, color space,
+canvas mode, symbol maps, alpha/bg handling, pixelFit, decode scale, decoder
+threads, swscale filter, ...) with a TPE (Bayesian) sampler. It scores
+`SSIM*100 - lambda*ms`, checkpoints state (resumable), shows a live status
+page, and finally writes `best_configs.json` per size/mode plus
+`formulas.json` (term-size -> config-value fits):
+
+```bash
+bun run playground/tuner.ts            # 8h budget, live status page
+bun run playground/tuner.ts --resume   # continue from checkpoint
+bun run playground/tuner.ts --silent --hours 0.01   # quick smoke test
 ```
 
 ### Maintenance

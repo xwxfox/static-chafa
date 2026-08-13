@@ -13,7 +13,7 @@ const CanvasMode: {
 };
 ```
 
-Defined in: [types.ts:34](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L34)
+Defined in: [types.ts:34](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L34)
 
 Chafa canvas color modes.
 
@@ -30,11 +30,11 @@ Chafa canvas color modes.
 
 | Name | Type | Default value | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="property-fgbg"></a> `FGBG` | `5` | `5` | [types.ts:40](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L40) |
-| <a id="property-fgbg_bgfg"></a> `FGBG_BGFG` | `4` | `4` | [types.ts:39](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L39) |
-| <a id="property-indexed_16"></a> `INDEXED_16` | `3` | `3` | [types.ts:38](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L38) |
-| <a id="property-indexed_16_8"></a> `INDEXED_16_8` | `7` | `7` | [types.ts:42](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L42) |
-| <a id="property-indexed_240"></a> `INDEXED_240` | `2` | `2` | [types.ts:37](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L37) |
-| <a id="property-indexed_256"></a> `INDEXED_256` | `1` | `1` | [types.ts:36](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L36) |
-| <a id="property-indexed_8"></a> `INDEXED_8` | `6` | `6` | [types.ts:41](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L41) |
-| <a id="property-truecolor"></a> `TRUECOLOR` | `0` | `0` | [types.ts:35](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L35) |
+| <a id="property-fgbg"></a> `FGBG` | `5` | `5` | [types.ts:40](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L40) |
+| <a id="property-fgbg_bgfg"></a> `FGBG_BGFG` | `4` | `4` | [types.ts:39](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L39) |
+| <a id="property-indexed_16"></a> `INDEXED_16` | `3` | `3` | [types.ts:38](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L38) |
+| <a id="property-indexed_16_8"></a> `INDEXED_16_8` | `7` | `7` | [types.ts:42](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L42) |
+| <a id="property-indexed_240"></a> `INDEXED_240` | `2` | `2` | [types.ts:37](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L37) |
+| <a id="property-indexed_256"></a> `INDEXED_256` | `1` | `1` | [types.ts:36](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L36) |
+| <a id="property-indexed_8"></a> `INDEXED_8` | `6` | `6` | [types.ts:41](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L41) |
+| <a id="property-truecolor"></a> `TRUECOLOR` | `0` | `0` | [types.ts:35](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L35) |

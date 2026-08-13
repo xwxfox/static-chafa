@@ -162,6 +162,8 @@ typedef struct
     float speed;
     int32_t pixel_fit;
     int32_t video_include_audio;
+    int32_t video_threads;
+    int32_t sws_scale;
     char symbols[128];
     char fill_symbols[128];
 } CodecConfig;
@@ -448,6 +450,8 @@ static void config_init(CodecConfig *cfg)
     cfg->max_frames = -1;
     cfg->optimizations = 0x7fffffff; /* CHAFA_OPTIMIZATION_ALL */
     cfg->pixel_fit = PIXEL_FIT_SCALE;
+    cfg->video_threads = 0;   /* auto */
+    cfg->sws_scale = 0;       /* auto (fast bilinear when downscaling) */
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -598,6 +602,14 @@ CODEC_EXPORT int32_t codec_ctx_get_pixel_fit(CodecCtx *ctx)
 CODEC_EXPORT int32_t codec_ctx_get_video_include_audio(CodecCtx *ctx)
 {
     return ctx ? ctx->cfg.video_include_audio : 0;
+}
+CODEC_EXPORT int32_t codec_ctx_get_video_threads(CodecCtx *ctx)
+{
+    return ctx ? ctx->cfg.video_threads : 0;
+}
+CODEC_EXPORT int32_t codec_ctx_get_sws_scale(CodecCtx *ctx)
+{
+    return ctx ? ctx->cfg.sws_scale : 0;
 }
 /** @} */
 
@@ -1578,6 +1590,14 @@ CODEC_EXPORT uint8_t *codec_anim_frame_data(CodecCtx *ctx, int32_t handle, int32
     return h->rgbabuf + frame_idx * h->frame_size;
 }
 
+/* Byte size of one animation frame's RGBA data (w * h * 4). */
+CODEC_EXPORT int32_t codec_anim_frame_bytes(CodecCtx *ctx, int32_t handle)
+{
+    if (!ctx || handle < 0 || handle >= 16 || !ctx->handles[handle])
+        return -1;
+    return ctx->handles[handle]->frame_size;
+}
+
 CODEC_EXPORT char *codec_anim_render_frame(CodecCtx *ctx, int32_t handle, int32_t frame_idx,
                                            CodecMetrics *out)
 {
@@ -1751,4 +1771,61 @@ CODEC_EXPORT int32_t codec_anim_goto(CodecCtx *ctx, int32_t handle, int32_t fram
 CODEC_EXPORT void codec_free(void *p)
 {
     free(p);
+}
+
+/* Set the number of worker threads chafa's batch processors may spawn.
+   Per-process global. Used by the tuner to avoid oversubscription when
+   many renderer processes run in parallel. */
+CODEC_EXPORT void codec_set_threads(int n)
+{
+    chafa_set_n_threads(n > 0 ? n : 1);
+}
+
+/* -- Harness support -- */
+
+/* Coverage bitmaps of the primary symbol map's glyphs (8 rows of 8 bits,
+   LSB = leftmost pixel, 1 = glyph pixel). Uses the exact same canvas config
+   path as rendering, so rasterizing the matrix with these bitmaps is
+   pixel-faithful. Returns 0 on success. */
+CODEC_EXPORT int codec_symbol_glyphs(const CodecCtx *ctx, const uint32_t *cps, int n, uint8_t *out)
+{
+    if (!ctx || n <= 0 || !cps || !out)
+        return -1;
+
+    ChafaCanvasConfig *cc = make_canvas_config(&ctx->cfg);
+    if (!cc)
+        return -1;
+    ChafaSymbolMap *sm = (ChafaSymbolMap *)chafa_canvas_config_peek_symbol_map(cc);
+    if (!sm)
+    {
+        chafa_canvas_config_unref(cc);
+        return -1;
+    }
+
+    for (int i = 0; i < n; i++)
+    {
+        gpointer pix = NULL;
+        gint w = 0, h = 0, stride = 0;
+        uint8_t *row = out + (size_t)i * 8;
+        memset(row, 0, 8);
+
+        if (chafa_symbol_map_get_glyph(sm, (gunichar)cps[i],
+                                       CHAFA_PIXEL_RGBA8_UNASSOCIATED,
+                                       &pix, &w, &h, &stride) && pix && w > 0 && h > 0)
+        {
+            const uint8_t *p = (const uint8_t *)pix;
+            for (int y = 0; y < h && y < 8; y++)
+            {
+                for (int x = 0; x < w && x < 8; x++)
+                {
+                    if (p[(size_t)y * (size_t)stride + (size_t)x * 4 + 3] >= 128)
+                        row[y] |= (uint8_t)(1u << x);
+                }
+            }
+            g_free(pix);
+        }
+    }
+
+    chafa_canvas_config_unref(cc);
+    return 0;
 }

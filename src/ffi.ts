@@ -1,5 +1,5 @@
 // ffi.ts - Bun FFI bindings for codec.so (dev/test only)
-import { dlopen, FFIType, ptr, CString, toArrayBuffer } from "bun:ffi";
+import { dlopen, FFIType, ptr, CString, toArrayBuffer, type Pointer } from "bun:ffi";
 import type { CodecMetrics, ChafaConfig, ChafaConfigPartial, ChafaImageData } from "./types.ts";
 import { defaultConfig } from "./types.ts";
 export type { CodecMetrics, ChafaConfig, ChafaConfigPartial, ChafaImageData };
@@ -43,8 +43,18 @@ const lib = dlopen("codec.so", {
 });
 const s = lib.symbols;
 
+/* bun:ffi's typings are strict (Pointer objects, non-null), while the
+   runtime also accepts plain numbers. These helpers keep the type checker
+   happy without changing runtime behavior. */
+function ptrOrThrow(v: Uint8Array | Int32Array | Float64Array): Pointer {
+    const p = ptr(v);
+    if (p === null) throw new Error("FFI: failed to allocate pointer");
+    return p;
+}
+const asPtr = (n: number | Pointer | null) => n as unknown as Pointer;
+
 /* -- CodecConfig layout (must match codec.c byte-for-byte) --
-   Layout: 24 fields (int32/float) + 2 × 128 byte char buffers
+   Layout: 26 fields (int32/float) + 2 × 128 byte char buffers
    Fields in order:
      i[0]  term_w          f[4]  work_factor      f[16] dither_intensity
      i[1]  term_h          i[5]  dither_mode       i[17] fg_only
@@ -54,13 +64,14 @@ const s = lib.symbols;
                            i[9]  color_space       f[21] speed
                            i[10] pixel_mode        i[22] pixel_fit
                            i[11] bg_color          i[23] video_include_audio
-                           i[12] fg_color          :96   symbols[128]
-                           i[13] alpha_threshold   :224  fill_symbols[128]
-                           i[14] dither_grain_w    =352 bytes total
-                           i[15] dither_grain_h
+                           i[12] fg_color          i[24] video_threads
+                           i[13] alpha_threshold   i[25] sws_scale
+                           i[14] dither_grain_w    :104  symbols[128]
+                           i[15] dither_grain_h    :232  fill_symbols[128]
+                                                  =360 bytes total
 */
-const CONFIG_INTS = 24;   // 24 × 4 = 96 bytes of int32/float fields
-const CONFIG_SIZE = CONFIG_INTS * 4 + 128 + 128; // 352 bytes
+const CONFIG_INTS = 26;   // 26 × 4 = 104 bytes of int32/float fields
+const CONFIG_SIZE = CONFIG_INTS * 4 + 128 + 128; // 360 bytes
 
 let _cfgBuf: Uint8Array | null = null;
 let _metricsBuf: Uint8Array | null = null;
@@ -108,8 +119,10 @@ function configToNative(cfg: ChafaConfig): Uint8Array {
     f[21] = cfg.speed;
     i[22] = cfg.pixelFit;
     i[23] = cfg.videoIncludeAudio;
+    i[24] = cfg.videoThreads;
+    i[25] = cfg.swsScale;
 
-    /* Write symbols string at byte offset 96, fillSymbols at 224 */
+    /* Write symbols string at byte offset 104, fillSymbols at 232 */
     const writeStr = (str: string | undefined, off: number) => {
         if (!str) { b[off] = 0; return; }
         const bytes = _textEncoder.encode(str);
@@ -117,13 +130,13 @@ function configToNative(cfg: ChafaConfig): Uint8Array {
         for (let j = 0; j < n; j++) b[off + j] = bytes[j]!;
         b[off + n] = 0;
     };
-    writeStr(cfg.symbols, 96);
-    writeStr(cfg.fillSymbols, 224);
+    writeStr(cfg.symbols, 104);
+    writeStr(cfg.fillSymbols, 232);
 
     return b;
 }
 
-function metricsFromNative(b: ArrayBuffer): CodecMetrics {
+function metricsFromNative(b: ArrayBufferLike): CodecMetrics {
     const f = new Float32Array(b);
     const i = new Int32Array(b);
     return {
@@ -144,20 +157,20 @@ function metricsFromNative(b: ArrayBuffer): CodecMetrics {
 
 export function createContext(cfg?: ChafaConfigPartial): number {
     const native = configToNative({ ...defaultConfig(), ...cfg });
-    const ctxPtr = s.codec_ctx_new(ptr(native));
+    const ctxPtr = s.codec_ctx_new(ptrOrThrow(native));
     if (!ctxPtr) throw new Error("Failed to create chafa context");
     return Number(ctxPtr);
 }
 
 export function destroyContext(ctx: number): void {
     if (!ctx) return;
-    s.codec_ctx_free(ctx);
+    s.codec_ctx_free(asPtr(ctx));
 }
 
 export function configureContext(ctx: number, cfg: ChafaConfigPartial): void {
     const d = defaultConfig();
     const merged: ChafaConfig = { ...d, ...cfg };
-    s.codec_ctx_configure(ctx, ptr(configToNative(merged)));
+    s.codec_ctx_configure(asPtr(ctx), ptrOrThrow(configToNative(merged)));
 }
 
 export function decodeBuffer(data: Uint8Array): ChafaImageData {
@@ -169,9 +182,9 @@ export function decodeBuffer(data: Uint8Array): ChafaImageData {
     /* Exact-size decode: the native side allocates only what the image
        needs (no 256MB worst-case buffer) */
     const rgbaPtr = s.codec_decode_buffer(
-        ptr(data), data.length,
-        ptr(new Uint8Array(wArr.buffer)), ptr(new Uint8Array(hArr.buffer)),
-        ptr(new Uint8Array(strideArr.buffer)), ptr(m), ptr(eb),
+        ptrOrThrow(data), data.length,
+        ptrOrThrow(new Uint8Array(wArr.buffer)), ptrOrThrow(new Uint8Array(hArr.buffer)),
+        ptrOrThrow(new Uint8Array(strideArr.buffer)), ptrOrThrow(m), ptrOrThrow(eb),
     );
 
     if (!rgbaPtr || eb[0] !== 0)
@@ -179,20 +192,20 @@ export function decodeBuffer(data: Uint8Array): ChafaImageData {
 
     const w = wArr[0]!, h = hArr[0]!, stride = strideArr[0]!;
     const size = h * stride;
-    const rgba = new Uint8Array(toArrayBuffer(Number(rgbaPtr), 0, size));
+    const rgba = new Uint8Array(toArrayBuffer(asPtr(Number(rgbaPtr)), 0, size));
     s.codec_free(rgbaPtr);
     return { rgba, width: w, height: h, stride, metrics: metricsFromNative(m.buffer) };
 }
 
 export function freeNative(ptr_val: number): void {
-    s.codec_free(ptr_val);
+    s.codec_free(asPtr(ptr_val));
 }
 
 export function render(ctx: number, data: Uint8Array): { ansi: string; metrics: CodecMetrics } {
     if (!data || data.length === 0) throw new Error("Empty buffer");
     const m = metricsBuf();
     const eb = errBuf();
-    const resultPtr = s.codec_render(ctx, ptr(data), data.length, ptr(m), ptr(eb));
+    const resultPtr = s.codec_render(asPtr(ctx), ptrOrThrow(data), data.length, ptrOrThrow(m), ptrOrThrow(eb));
     if (!resultPtr) throw new Error("Render returned null");
     const ansi = new CString(resultPtr).toString();
     s.codec_free(resultPtr);
@@ -203,7 +216,7 @@ export function render(ctx: number, data: Uint8Array): { ansi: string; metrics: 
 export function renderRgba(ctx: number, rgba: Uint8Array, w: number, h: number): { ansi: string; metrics: CodecMetrics } {
     if (!rgba || rgba.length === 0) throw new Error("Empty RGBA buffer");
     const m = metricsBuf();
-    const resultPtr = s.codec_render_rgba(ctx, ptr(rgba), w, h, w * 4, ptr(m));
+    const resultPtr = s.codec_render_rgba(asPtr(ctx), ptrOrThrow(rgba), w, h, w * 4, ptrOrThrow(m));
     if (!resultPtr) throw new Error("Render returned null");
     const ansi = new CString(resultPtr).toString();
     s.codec_free(resultPtr);
@@ -214,7 +227,7 @@ export function renderMatrix(ctx: number, data: Uint8Array): { matrix: string; m
     if (!data || data.length === 0) throw new Error("Empty buffer");
     const m = metricsBuf();
     const eb = errBuf();
-    const resultPtr = s.codec_render_matrix(ctx, ptr(data), data.length, ptr(m), ptr(eb));
+    const resultPtr = s.codec_render_matrix(asPtr(ctx), ptrOrThrow(data), data.length, ptrOrThrow(m), ptrOrThrow(eb));
     if (!resultPtr) throw new Error("Render matrix returned null");
     const matrix = new CString(resultPtr).toString();
     s.codec_free(resultPtr);
@@ -225,7 +238,7 @@ export function renderMatrix(ctx: number, data: Uint8Array): { matrix: string; m
 export function renderMatrixRgba(ctx: number, rgba: Uint8Array, w: number, h: number): { matrix: string; metrics: CodecMetrics } {
     if (!rgba || rgba.length === 0) throw new Error("Empty RGBA buffer");
     const m = metricsBuf();
-    const resultPtr = s.codec_render_matrix_rgba(ctx, ptr(rgba), w, h, w * 4, ptr(m));
+    const resultPtr = s.codec_render_matrix_rgba(asPtr(ctx), ptrOrThrow(rgba), w, h, w * 4, ptrOrThrow(m));
     if (!resultPtr) throw new Error("Render matrix returned null");
     const matrix = new CString(resultPtr).toString();
     s.codec_free(resultPtr);
@@ -236,32 +249,33 @@ export function animOpen(ctx: number, data: Uint8Array): { handle: number; metri
     if (!data || data.length === 0) throw new Error("Empty buffer");
     const m = metricsBuf();
     const eb = errBuf();
-    const handle = s.codec_anim_open(ctx, ptr(data), data.length, ptr(m), ptr(eb));
+    const handle = s.codec_anim_open(asPtr(ctx), ptrOrThrow(data), data.length, ptrOrThrow(m), ptrOrThrow(eb));
     if (handle < 0) throw new Error(`Failed to open animation (error ${eb[0]})`);
     return { handle, metrics: metricsFromNative(m.buffer) };
 }
 
 export function animNext(ctx: number, handle: number): { frameIndex: number; metrics: CodecMetrics } | null {
     const m = metricsBuf();
-    const idx = s.codec_anim_next(ctx, handle, ptr(m));
+    const idx = s.codec_anim_next(asPtr(ctx), handle, ptrOrThrow(m));
     if (idx < 0) return null;
     return { frameIndex: idx, metrics: metricsFromNative(m.buffer) };
 }
 
 export function animRenderFrame(ctx: number, handle: number, frameIndex: number): { ansi: string; metrics: CodecMetrics } {
     const m = metricsBuf();
-    const resultPtr = s.codec_anim_render_frame(ctx, handle, frameIndex, ptr(m));
+    const resultPtr = s.codec_anim_render_frame(asPtr(ctx), handle, frameIndex, ptrOrThrow(m));
+    if (!resultPtr) throw new Error("Render frame returned null");
     const ansi = new CString(resultPtr).toString();
     s.codec_free(resultPtr);
     return { ansi, metrics: metricsFromNative(m.buffer) };
 }
 
 export function animRewind(ctx: number, handle: number): void {
-    s.codec_anim_rewind(ctx, handle);
+    s.codec_anim_rewind(asPtr(ctx), handle);
 }
 
 export function animClose(ctx: number, handle: number): void {
-    s.codec_anim_close(ctx, handle);
+    s.codec_anim_close(asPtr(ctx), handle);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -271,7 +285,7 @@ export function animClose(ctx: number, handle: number): void {
 export function videoOpen(ctx: number, data: Uint8Array, decodeW: number, decodeH: number): { handle: number; metrics: CodecMetrics } {
     const m = metricsBuf();
     const eb = new Int32Array(1); eb[0] = 0;
-    const handle = s.codec_video_open(ctx, ptr(data), data.length, decodeW, decodeH, ptr(m), ptr(new Uint8Array(eb.buffer)));
+    const handle = s.codec_video_open(asPtr(ctx), ptrOrThrow(data), data.length, decodeW, decodeH, ptrOrThrow(m), ptrOrThrow(new Uint8Array(eb.buffer)));
     if (handle < 0) {
         const err = new (require("bun:ffi").CString)(s.codec_video_error()).toString();
         throw new Error(`Failed to open video: ${err}`);
@@ -290,9 +304,9 @@ export function videoNext(ctx: number, handle: number, rgba?: Uint8Array): { fra
     let out: Uint8Array;
     if (rgba && rgba.length > 0) {
         out = rgba;
-        const idx = s.codec_video_next(ctx, handle, ptr(rgba), rgba.length,
-            ptr(new Uint8Array(w.buffer)), ptr(new Uint8Array(h.buffer)),
-            ptr(new Uint8Array(pts.buffer)), ptr(m), 0, 0,
+        const idx = s.codec_video_next(asPtr(ctx), handle, ptrOrThrow(rgba), rgba.length,
+            ptrOrThrow(new Uint8Array(w.buffer)), ptrOrThrow(new Uint8Array(h.buffer)),
+            ptrOrThrow(new Uint8Array(pts.buffer)), ptrOrThrow(m), 0, 0,
             0, 0, 0, 0);
         if (idx < 0) return null;
         return { frameIndex: idx, w: w[0]!, h: h[0]!, ptsSec: pts[0]!, metrics: metricsFromNative(m.buffer), rgba: out, audioSamples: 0, audioChannels: 0, audioSampleRate: 0 };
@@ -304,18 +318,18 @@ export function videoNext(ctx: number, handle: number, rgba?: Uint8Array): { fra
     const audioSamplesArr = new Int32Array(1);
     const audioChArr = new Int32Array(1);
     const audioRateArr = new Int32Array(1);
-    const idx = s.codec_video_next(ctx, handle, 0, 0,
-        ptr(new Uint8Array(w.buffer)), ptr(new Uint8Array(h.buffer)),
-        ptr(new Uint8Array(pts.buffer)), ptr(m),
-        ptr(ptrBuf), ptr(new Uint8Array(sizeArr.buffer)),
-        ptr(audioPtrBuf), ptr(new Uint8Array(audioSamplesArr.buffer)),
-        ptr(new Uint8Array(audioChArr.buffer)), ptr(new Uint8Array(audioRateArr.buffer)));
+    const idx = s.codec_video_next(asPtr(ctx), handle, 0, 0,
+        ptrOrThrow(new Uint8Array(w.buffer)), ptrOrThrow(new Uint8Array(h.buffer)),
+        ptrOrThrow(new Uint8Array(pts.buffer)), ptrOrThrow(m),
+        ptrOrThrow(ptrBuf), ptrOrThrow(new Uint8Array(sizeArr.buffer)),
+        ptrOrThrow(audioPtrBuf), ptrOrThrow(new Uint8Array(audioSamplesArr.buffer)),
+        ptrOrThrow(new Uint8Array(audioChArr.buffer)), ptrOrThrow(new Uint8Array(audioRateArr.buffer)));
     if (idx < 0) return null;
 
     const framePtr = Number(new BigUint64Array(ptrBuf.buffer, ptrBuf.byteOffset, 1)[0]);
     const size = sizeArr[0]!;
     if (framePtr && size > 0) {
-        out = new Uint8Array(toArrayBuffer(framePtr, 0, size));
+        out = new Uint8Array(toArrayBuffer(asPtr(framePtr), 0, size));
     } else {
         out = new Uint8Array(0);
     }
@@ -326,7 +340,7 @@ export function videoNext(ctx: number, handle: number, rgba?: Uint8Array): { fra
     const audioSampleRate = audioRateArr[0]!;
     let audio: Float32Array | undefined;
     if (audioPtr && audioSamples > 0 && audioChannels > 0) {
-        const ab = toArrayBuffer(audioPtr, 0, audioSamples * audioChannels * 4);
+        const ab = toArrayBuffer(asPtr(audioPtr), 0, audioSamples * audioChannels * 4);
         audio = new Float32Array(ab, 0, audioSamples * audioChannels);
     }
 
@@ -335,36 +349,36 @@ export function videoNext(ctx: number, handle: number, rgba?: Uint8Array): { fra
 
 export function videoThumbnail(ctx: number, handle: number): { rgba: Uint8Array; width: number; height: number } {
     const w = new Int32Array(1), h = new Int32Array(1);
-    const bytes = s.codec_video_thumb_size(ctx, handle,
-        ptr(new Uint8Array(w.buffer)), ptr(new Uint8Array(h.buffer)));
+    const bytes = s.codec_video_thumb_size(asPtr(ctx), handle,
+        ptrOrThrow(new Uint8Array(w.buffer)), ptrOrThrow(new Uint8Array(h.buffer)));
     if (bytes <= 0) throw new Error("Thumbnail unavailable");
     const buf = new Uint8Array(bytes);
-    const r = s.codec_video_thumbnail(ctx, handle, ptr(buf), buf.length,
-        ptr(new Uint8Array(w.buffer)), ptr(new Uint8Array(h.buffer)));
+    const r = s.codec_video_thumbnail(asPtr(ctx), handle, ptrOrThrow(buf), buf.length,
+        ptrOrThrow(new Uint8Array(w.buffer)), ptrOrThrow(new Uint8Array(h.buffer)));
     if (r < 0) throw new Error("Thumbnail unavailable");
     return { rgba: buf.slice(0, w[0]! * h[0]! * 4), width: w[0]!, height: h[0]! };
 }
 
 export function videoPlay(ctx: number, handle: number, speed = 1.0): void {
-    s.codec_video_play(ctx, handle, speed);
+    s.codec_video_play(asPtr(ctx), handle, speed);
 }
 
 export function videoPause(ctx: number, handle: number): void {
-    s.codec_video_pause(ctx, handle);
+    s.codec_video_pause(asPtr(ctx), handle);
 }
 
 export function animGoto(ctx: number, handle: number, frameIdx: number): number {
-    return s.codec_anim_goto(ctx, handle, frameIdx);
+    return s.codec_anim_goto(asPtr(ctx), handle, frameIdx);
 }
 
 export function videoSeek(ctx: number, handle: number, targetSec: number): void {
-    s.codec_video_seek(ctx, handle, targetSec);
+    s.codec_video_seek(asPtr(ctx), handle, targetSec);
 }
 
 export function videoClose(ctx: number, handle: number): void {
-    s.codec_video_close(ctx, handle);
+    s.codec_video_close(asPtr(ctx), handle);
 }
 
 export function animAbort(ctx: number, handle: number): void {
-    s.codec_anim_abort(ctx, handle);
+    s.codec_anim_abort(asPtr(ctx), handle);
 }

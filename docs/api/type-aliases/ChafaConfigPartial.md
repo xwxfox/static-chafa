@@ -4,6 +4,6 @@
 type ChafaConfigPartial = Partial<ChafaConfig>;
 ```
 
-Defined in: [types.ts:171](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L171)
+Defined in: [types.ts:222](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L222)
 
 Partial config, for constructor and `updateConfig()`.

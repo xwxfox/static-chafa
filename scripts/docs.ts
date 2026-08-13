@@ -35,7 +35,7 @@ mkdirSync(DOCS_DIR, { recursive: true });
 
 // Step 1: Generate TypeScript API docs via typedoc
 console.log("-> Generating TypeScript API docs...");
-const tr = Bun.spawnSync(["bunx", "typedoc"], { stdio: ["ignore", "ignore", "pipe"] });
+const tr = Bun.spawnSync(["bunx", "typedoc"], { stdio: ["ignore", "pipe", "pipe"] });
 if (tr.exitCode !== 0) throw new Error("typedoc failed");
 
 // Step 2: Generate C API reference via doxygen -> moxygen

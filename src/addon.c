@@ -21,6 +21,8 @@ typedef struct
     float speed;
     int32_t pixel_fit;
     int32_t video_include_audio;
+    int32_t video_threads;
+    int32_t sws_scale;
     char symbols[128];
     char fill_symbols[128];
 } CodecConfig;
@@ -233,6 +235,8 @@ static void read_config(napi_env env, napi_value obj, CodecConfig *cfg)
     cfg->max_frames = -1;
     cfg->optimizations = 0x7fffffff;
     cfg->pixel_fit = 1; /* SCALE */
+    cfg->video_threads = 0;
+    cfg->sws_scale = 0;
 
     int32_t iv;
     double dv;
@@ -261,6 +265,8 @@ static void read_config(napi_env env, napi_value obj, CodecConfig *cfg)
     if (read_double(env, obj, "speed", &dv)) cfg->speed = (float)dv;
     if (read_int32(env, obj, "pixelFit", &iv)) cfg->pixel_fit = iv;
     if (read_int32(env, obj, "videoIncludeAudio", &iv)) cfg->video_include_audio = iv;
+    if (read_int32(env, obj, "videoThreads", &iv)) cfg->video_threads = iv;
+    if (read_int32(env, obj, "swsScale", &iv)) cfg->sws_scale = iv;
 
     read_string(env, obj, "symbols", cfg->symbols, sizeof(cfg->symbols));
     read_string(env, obj, "fillSymbols", cfg->fill_symbols, sizeof(cfg->fill_symbols));
@@ -674,6 +680,10 @@ extern void codec_video_play(CodecCtx *ctx, int32_t handle, double speed);
 extern void codec_video_pause(CodecCtx *ctx, int32_t handle);
 extern const char *codec_video_error(void);
 extern int32_t codec_anim_goto(CodecCtx *ctx, int32_t handle, int32_t frame_idx);
+extern uint8_t *codec_anim_frame_data(CodecCtx *ctx, int32_t handle, int32_t frame_idx);
+extern int32_t codec_anim_frame_bytes(CodecCtx *ctx, int32_t handle);
+extern int codec_symbol_glyphs(const CodecCtx *ctx, const uint32_t *cps, int n, uint8_t *out);
+extern void codec_set_threads(int n);
 
 /* -- VideoStatus mirror (must match codec_video.c byte-for-byte) -- */
 typedef struct
@@ -951,6 +961,87 @@ static napi_value chafa_anim_goto(napi_env env, napi_callback_info info)
     return result;
 }
 
+/* -- chafaAnimFrameData(ctx, handle, frameIndex) -> Buffer | null.
+      Zero-copy view into the anim frame pool; valid until the next
+      anim call / close. Frame size = animation width * height * 4. -- */
+static napi_value chafa_anim_frame_data(napi_env env, napi_callback_info info)
+{
+    size_t argc = 3;
+    napi_value argv[3];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+    int32_t handle, frame_idx;
+    napi_get_value_int32(env, argv[1], &handle);
+    napi_get_value_int32(env, argv[2], &frame_idx);
+
+    uint8_t *data = codec_anim_frame_data(ctx, handle, frame_idx);
+    int32_t bytes = codec_anim_frame_bytes(ctx, handle);
+    if (!data || bytes <= 0)
+    {
+        napi_value nul;
+        napi_get_null(env, &nul);
+        return nul;
+    }
+
+    napi_value buf_val;
+    napi_create_external_buffer(env, (size_t)bytes, data, NULL, NULL, &buf_val);
+    return buf_val;
+}
+
+/* -- chafaSymbolGlyphs(ctx, u32BufferOfCharCodes) -> Buffer (8 bytes per
+      glyph: 8 rows of 8 coverage bits, LSB = leftmost pixel). Uses the
+      exact symbol map the renderer uses. -- */
+static napi_value chafa_symbol_glyphs(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    CodecCtx *ctx = NULL;
+    if (napi_get_value_external(env, argv[0], (void **)&ctx) != napi_ok || !ctx)
+        { napi_throw_error(env, NULL, "Invalid context"); return NULL; }
+
+    void *data;
+    size_t len;
+    if (napi_get_buffer_info(env, argv[1], &data, &len) != napi_ok)
+        { napi_throw_type_error(env, NULL, "Expected Buffer"); return NULL; }
+
+    int n = (int)(len / 4);
+    if (n <= 0)
+    {
+        napi_value nul;
+        napi_get_null(env, &nul);
+        return nul;
+    }
+
+    uint8_t *out = malloc((size_t)n * 8);
+    if (!out)
+    {
+        napi_throw_error(env, NULL, "malloc failed");
+        return NULL;
+    }
+    codec_symbol_glyphs(ctx, (const uint32_t *)data, n, out);
+
+    napi_value buf_val;
+    napi_create_external_buffer(env, (size_t)n * 8, out, rgba_buffer_finalize, NULL, &buf_val);
+    return buf_val;
+}
+
+/* -- chafaSetThreads(n) -- */
+static napi_value chafa_set_threads(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value argv[1];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+    int32_t n = 1;
+    napi_get_value_int32(env, argv[0], &n);
+    codec_set_threads((int)n);
+    return NULL;
+}
+
 /* -- chafaVideoInfo(ctx, handle) -> metadata -- */
 static napi_value chafa_video_info(napi_env env, napi_callback_info info)
 {
@@ -1058,6 +1149,9 @@ napi_value Init(napi_env env, napi_value exports)
     EXPORT("chafaAnimClose", chafa_anim_close);
     EXPORT("chafaAnimAbort", chafa_anim_abort);
     EXPORT("chafaAnimGoto", chafa_anim_goto);
+    EXPORT("chafaAnimFrameData", chafa_anim_frame_data);
+    EXPORT("chafaSymbolGlyphs", chafa_symbol_glyphs);
+    EXPORT("chafaSetThreads", chafa_set_threads);
     EXPORT("chafaVideoOpen", chafa_video_open);
     EXPORT("chafaVideoNext", chafa_video_next);
     EXPORT("chafaVideoInfo", chafa_video_info);

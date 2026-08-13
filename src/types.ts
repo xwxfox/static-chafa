@@ -102,6 +102,22 @@ export const Passthrough = {
     TMUX: 2,
 } as const;
 
+/** FFmpeg swscale conversion flags for video decode.
+ *
+ *  - `AUTO` (0) - FAST_BILINEAR when downscaling, BILINEAR otherwise (default)
+ *  - `BILINEAR` (1) - Quality bilinear filtering
+ *  - `POINT` (2) - Nearest-neighbor. Fastest, blocky
+ *  - `AREA` (3) - Area averaging. Good for large downscales, slower
+ *  - `FAST_BILINEAR` (4) - Faster bilinear approximation
+ */
+export const SwsScale = {
+    AUTO: 0,
+    BILINEAR: 1,
+    POINT: 2,
+    AREA: 3,
+    FAST_BILINEAR: 4,
+} as const;
+
 /** Pixel-mode size fitting strategy.
  *
  *  Controls how source pixels are matched to the terminal area in
@@ -185,6 +201,10 @@ export interface ChafaConfig {
      *  0 = discard audio entirely (default, saves CPU/memory).
      *  1 = decode audio; `video.nextFrame().audio` returns the frame's samples. */
     videoIncludeAudio: number;
+    /** FFmpeg video decoder thread count. 0 = auto (FFmpeg picks). Default: 0 */
+    videoThreads: number;
+    /** FFmpeg swscale filter for YUV->RGBA video decode. See {@link SwsScale}. Default: AUTO */
+    swsScale: number;
     /** Max animation frames to decode. -1 = all frames. Default: -1 */
     maxFrames: number;
     /** Animation playback speed multiplier. 1.0 = native speed. Default: 1.0 */
@@ -393,6 +413,8 @@ export function defaultConfig(): ChafaConfig {
         passthrough: Passthrough.NONE,
         pixelFit: PixelFit.SCALE,
         videoIncludeAudio: 0,
+        videoThreads: 0,
+        swsScale: SwsScale.AUTO,
         maxFrames: -1,
         speed: 1.0,
         symbols: "",

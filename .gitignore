@@ -30,3 +30,8 @@ chafa-git
 
 # generated doxygen intermediate files
 docs/c_api_xml/
+
+# debug info and frames emitted by playground/harness.ts
+harness_out
+# tuner state / results (playground/tuner.ts)
+tuner_out

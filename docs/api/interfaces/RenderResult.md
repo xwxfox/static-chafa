@@ -1,6 +1,6 @@
 # Interface: RenderResult
 
-Defined in: [types.ts:223](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L223)
+Defined in: [types.ts:278](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L278)
 
 Returned by [Chafa.render](../classes/Chafa.md#render) and [Chafa.renderRgba](../classes/Chafa.md#renderrgba).
 
@@ -8,5 +8,5 @@ Returned by [Chafa.render](../classes/Chafa.md#render) and [Chafa.renderRgba](..
 
 | Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="ansi"></a> `ansi` | `string` | UTF-8 ANSI terminal art string | [types.ts:225](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L225) |
-| <a id="metrics"></a> `metrics` | [`CodecMetrics`](CodecMetrics) | Timing and metadata | [types.ts:227](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L227) |
+| <a id="ansi"></a> `ansi` | `string` | UTF-8 ANSI terminal art string | [types.ts:280](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L280) |
+| <a id="metrics"></a> `metrics` | [`CodecMetrics`](CodecMetrics.md) | Timing and metadata | [types.ts:282](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L282) |

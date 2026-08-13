@@ -4,7 +4,7 @@
 function defaultConfig(): ChafaConfig;
 ```
 
-Defined in: [types.ts:286](https://github.com/xwxfox/chafa-ts-multirt/blob/25c6adb3b7e30df2d3e5f840d38613861ee17005/src/types.ts#L286)
+Defined in: [types.ts:396](https://github.com/xwxfox/chafa-ts-multirt/blob/a428a579838377f735fcd8486af331bf56b675a8/src/types.ts#L396)
 
 Returns a fresh default config object.
 
@@ -12,6 +12,10 @@ Returns a fresh default config object.
  For higher quality matching chafa CLI defaults, override:
  `{ workFactor: 0.5, preprocessing: 1 }`.
 
+ In pixel modes the canvas pixel area is `termW × cellW` by
+ `termH × cellH` (80×24 -> 640×384 by default), so output fills
+ the same terminal area as symbol mode.
+
 ## Returns
 
-[`ChafaConfig`](../interfaces/ChafaConfig)
+[`ChafaConfig`](../interfaces/ChafaConfig.md)
