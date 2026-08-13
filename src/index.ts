@@ -18,7 +18,7 @@
 
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
-import { defaultConfig as defaultChafaConfig } from "./types.ts";
+import { defaultConfig as defaultChafaConfig, PixelMode } from "./types.ts";
 
 const { platform, arch } = process;
 const SUFFIX = `${platform}-${arch}`;
@@ -53,11 +53,13 @@ export {
     FMT_NAMES,
     CanvasMode,
     PixelMode,
+    PixelFit,
     DitherMode,
     ColorExtractor,
     ColorSpace,
     Passthrough,
     defaultConfig,
+    pixelCanvasSize,
 } from "./types.ts";
 
 /* -- helpers -- */
@@ -123,12 +125,17 @@ export class ChafaImage {
  * Plays animated GIF or WebP images frame-by-frame.
  *
  * Created by `chafa.openAnimation(buffer)`. Supports `using` for
- * automatic cleanup at end of scope.
+ * automatic cleanup at end of scope. Works in every pixel mode
+ * (symbols, sixels, kitty, iterm2).
+ *
+ * Playback timing is caller-driven: pause by simply not calling
+ * `next()`. Set `anim.loop = true` to loop forever.
  *
  * ```ts
  * const anim = chafa.openAnimation(gifBuf);
+ * anim.loop = true;                       // loop forever
  * while (true) {
- *     const frame = anim.next();
+ *     const frame = anim.next();          // auto-rewinds at the end
  *     if (!frame) break;
  *     const { ansi, metrics } = anim.renderFrame(frame.frameIndex);
  *     process.stdout.write(ansi);
@@ -141,6 +148,7 @@ export class ChafaAnimation {
     #ctx: number;
     #handle: number;
     #closed = false;
+    #loop = false;
 
     /** Total frames in the animation (-1 for unknown-length WebP). */
     readonly frameCount: number;
@@ -161,12 +169,29 @@ export class ChafaAnimation {
     }
 
     /**
+     * Loop mode. When enabled, `next()` automatically rewinds and
+     * continues playback after the last frame instead of returning null.
+     */
+    get loop(): boolean {
+        return this.#loop;
+    }
+    set loop(value: boolean) {
+        this.#loop = value;
+    }
+
+    /**
      * Advance to the next frame.
-     * @returns Frame info or `null` when playback ends.
+     * @returns Frame info or `null` when playback ends (or, with `loop`
+     *   enabled, `null` only if rewind fails).
      */
     next(): import("./types.ts").AnimFrame | null {
         if (this.#closed) return null;
-        return native.chafaAnimNext(this.#ctx, this.#handle);
+        let frame = native.chafaAnimNext(this.#ctx, this.#handle);
+        if (!frame && this.#loop) {
+            native.chafaAnimRewind(this.#ctx, this.#handle);
+            frame = native.chafaAnimNext(this.#ctx, this.#handle);
+        }
+        return frame;
     }
 
     /**
@@ -252,13 +277,19 @@ export class ChafaVideo {
         this.audioChannels = info.audioChannels;
     }
 
-    /** Returns the next decoded RGBA frame, or null at end of video. */
+    /** Returns the next decoded RGBA frame, or null at end of video.
+     *
+     *  Zero-copy: `frame.rgba` is a view into the decoder's ring buffer.
+     *  It is only valid until the next `nextFrame()` / `seek()` / `close()`
+     *  call on this video. Copy it if you need it longer.
+     */
     nextFrame(): import("./types.ts").VideoFrame | null {
         if (this.#closed) return null;
         return native.chafaVideoNext(this.#ctx, this.#handle);
     }
 
-    /** Seek to the given time in seconds (nearest keyframe). */
+    /** Seek to the given time in seconds (nearest keyframe, clamped to
+     *  `[0, duration]`). */
     seek(timeSec: number): void {
         if (this.#closed) return;
         native.chafaVideoSeek(this.#ctx, this.#handle, timeSec);
@@ -419,6 +450,8 @@ export class Chafa {
      */
     renderMatrix(data: Buffer | Uint8Array): import("./types.ts").MatrixResult {
         this.#ensureAlive();
+        if (this.#config.pixelMode !== PixelMode.SYMBOLS)
+            throw new Error("renderMatrix is only available in symbol mode (pixelMode: PixelMode.SYMBOLS)");
         return native.chafaRenderMatrix(this.#ctx, ensureBuffer(data));
     }
 
@@ -431,6 +464,8 @@ export class Chafa {
      */
     renderMatrixRgba(rgba: Uint8Array, width: number, height: number): import("./types.ts").MatrixResult {
         this.#ensureAlive();
+        if (this.#config.pixelMode !== PixelMode.SYMBOLS)
+            throw new Error("renderMatrixRgba is only available in symbol mode (pixelMode: PixelMode.SYMBOLS)");
         return native.chafaRenderMatrixRgba(this.#ctx, ensureBuffer(rgba), width, height);
     }
 
@@ -466,9 +501,24 @@ export class Chafa {
      * Requires FFmpeg shared libraries installed on the system.
      * Throws a descriptive error if FFmpeg is not found.
      *
+     * A single Chafa instance can own the video decoder and render its
+     * frames - no second instance is needed:
+     * ```ts
+     * const chafa = new Chafa({ termW: 80, termH: 24, pixelMode: PixelMode.SIXELS });
+     * const video = chafa.openVideo(buf);
+     * while (true) {
+     *     const f = video.nextFrame();
+     *     if (!f) break;
+     *     const { ansi } = chafa.renderRgba(f.rgba, f.width, f.height);
+     *     process.stdout.write(ansi);
+     * }
+     * ```
+     *
      * @param data Video file bytes.
-     * @param decodeW Target decode width (0 = native resolution).
-     * @param decodeH Target decode height (0 = native resolution).
+     * @param decodeW Target decode width in pixels. `0` (default) decodes
+     *   at the pixel-fit size (`termW x cellW` by `termH x cellH`, aspect
+     *   preserving) so frames render 1:1.
+     * @param decodeH Target decode height in pixels. `0` = fit size.
      * @returns A {@link ChafaVideo} instance for frame iteration.
      */
     openVideo(data: Buffer | Uint8Array, decodeW?: number, decodeH?: number): ChafaVideo {

@@ -589,6 +589,71 @@ describe("Video", () => {
         c.destroy();
     });
 
+    test("decode at pixel-fit size when no explicit size given", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa({ termW: 80, termH: 24, pixelMode: PixelMode.SIXELS });
+        const v = c.openVideo(videoBuf, 0, 0);
+        const f = v.nextFrame();
+        expect(f).not.toBeNull();
+        // 80x24 cells at 8x16 px = 640x384 canvas; 16:9 video -> 640x360 fit box
+        expect(f!.width).toBeGreaterThan(0);
+        expect(f!.width).toBeLessThanOrEqual(640);
+        expect(f!.height).toBeGreaterThan(0);
+        expect(f!.height).toBeLessThanOrEqual(384);
+        v.close();
+        c.destroy();
+    });
+
+    test("seek target is clamped to video duration", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 320, 240);
+        v.nextFrame();
+        v.seek(v.durationSec + 500);
+        const f = v.nextFrame();
+        expect(f).not.toBeNull();
+        expect(f!.ptsSec).toBeLessThanOrEqual(v.durationSec);
+        v.close();
+        c.destroy();
+    });
+
+    test("rapid seeks near the end stay near the end and can seek back", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa();
+        const v = c.openVideo(videoBuf, 320, 240);
+        let pts = v.nextFrame()!.ptsSec;
+        // Repeated +30s seeks (targeting past the end) must never go backward
+        let prev = pts;
+        for (let i = 0; i < 4; i++) {
+            v.seek(pts + 30);
+            const f = v.nextFrame();
+            expect(f).not.toBeNull();
+            expect(f!.ptsSec).toBeGreaterThanOrEqual(prev);
+            prev = f!.ptsSec;
+            pts = f!.ptsSec;
+        }
+        // Seeking backward still works
+        v.seek(1);
+        const g = v.nextFrame();
+        expect(g).not.toBeNull();
+        expect(g!.ptsSec).toBeLessThan(5);
+        v.close();
+        c.destroy();
+    });
+
+    test("single instance owns both video decode and rendering", () => {
+        if (!hasVideo()) return;
+        const c = new Chafa({ termW: 60, termH: 20, pixelMode: PixelMode.SIXELS });
+        const v = c.openVideo(videoBuf, 320, 180);
+        const f = v.nextFrame();
+        expect(f).not.toBeNull();
+        const { ansi, metrics } = c.renderRgba(f!.rgba, f!.width, f!.height);
+        expect(ansi.startsWith("\x1bP")).toBe(true);
+        expect(metrics.pixelMode).toBe(PixelMode.SIXELS);
+        v.close();
+        c.destroy();
+    });
+
     test("close is safe to call twice", () => {
         if (!hasVideo()) return;
         const c = new Chafa();

@@ -38,7 +38,7 @@ console.log("-> Generating TypeScript API docs...");
 const tr = Bun.spawnSync(["bunx", "typedoc"], { stdio: ["ignore", "ignore", "pipe"] });
 if (tr.exitCode !== 0) throw new Error("typedoc failed");
 
-// Step 2: Generate C API reference via doxygen → moxygen
+// Step 2: Generate C API reference via doxygen -> moxygen
 console.log("-> Generating C API reference...");
 const dr = Bun.spawnSync(["doxygen", "docs/Doxyfile.c"], { stdio: ["ignore", "ignore", "pipe"] });
 if (dr.exitCode !== 0) throw new Error("doxygen failed");
@@ -284,6 +284,9 @@ of each option.
 | Field | Default | Description |
 |-------|---------|-------------|
 | \`pixelMode\` | 0 | SYMBOLS, SIXELS, KITTY, or ITERM2 |
+| \`pixelFit\` | 1 | NONE (0): hand pixels to chafa unchanged. SCALE (1): pre-scale pixels to the target area (\`termW × cellW\` by \`termH × cellH\`, aspect-preserving, centered) so chafa draws 1:1 |
+| \`cellW\` | 8 | Cell width in pixels (pixel modes only) |
+| \`cellH\` | 16 | Cell height in pixels (pixel modes only); 16 matches a typical 1:2 font aspect so output fills the same area as symbol mode |
 
 ### Output
 | Field | Default | Description |

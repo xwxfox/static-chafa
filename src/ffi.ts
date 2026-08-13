@@ -1,11 +1,11 @@
 // ffi.ts - Bun FFI bindings for codec.so (dev/test only)
-import { dlopen, FFIType, ptr, CString } from "bun:ffi";
+import { dlopen, FFIType, ptr, CString, toArrayBuffer } from "bun:ffi";
 import type { CodecMetrics, ChafaConfig, ChafaConfigPartial, ChafaImageData } from "./types.ts";
 import { defaultConfig } from "./types.ts";
 export type { CodecMetrics, ChafaConfig, ChafaConfigPartial, ChafaImageData };
 export {
     CanvasMode, PixelMode, DitherMode, ColorExtractor, ColorSpace, Passthrough,
-    defaultConfig
+    PixelFit, defaultConfig
 } from "./types.ts";
 
 const FMT_NAMES = ["PNG", "JPEG", "BMP", "GIF", "WebP"];
@@ -28,7 +28,7 @@ const lib = dlopen("codec.so", {
     codec_anim_abort: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.void },
     codec_free: { args: [FFIType.ptr], returns: FFIType.void },
     codec_video_open: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
-    codec_video_next: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+    codec_video_next: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
     codec_video_info: { args: [FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
     codec_video_seek: { args: [FFIType.ptr, FFIType.i32, FFIType.f64], returns: FFIType.i32 },
     codec_video_close: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.void },
@@ -38,7 +38,7 @@ const lib = dlopen("codec.so", {
 const s = lib.symbols;
 
 /* -- CodecConfig layout (must match codec.c byte-for-byte) --
-   Layout: 22 fields (int32/float) + 2 × 128 byte char buffers
+   Layout: 23 fields (int32/float) + 2 × 128 byte char buffers
    Fields in order:
      i[0]  term_w          f[4]  work_factor      f[16] dither_intensity
      i[1]  term_h          i[5]  dither_mode       i[17] fg_only
@@ -46,15 +46,15 @@ const s = lib.symbols;
      i[3]  cell_h          i[7]  preprocessing     i[19] passthrough
                            i[8]  color_extractor   i[20] max_frames
                            i[9]  color_space       f[21] speed
-                           i[10] pixel_mode         :88  symbols[128]
-                           i[11] bg_color           :216 fill_symbols[128]
-                           i[12] fg_color           =344 bytes total
-                           i[13] alpha_threshold
+                           i[10] pixel_mode        i[22] pixel_fit
+                           i[11] bg_color          :92   symbols[128]
+                           i[12] fg_color          :220  fill_symbols[128]
+                           i[13] alpha_threshold   =348 bytes total
                            i[14] dither_grain_w
                            i[15] dither_grain_h
 */
-const CONFIG_INTS = 22;   // 22 × 4 = 88 bytes of int32/float fields
-const CONFIG_SIZE = CONFIG_INTS * 4 + 128 + 128; // 344 bytes
+const CONFIG_INTS = 23;   // 23 × 4 = 92 bytes of int32/float fields
+const CONFIG_SIZE = CONFIG_INTS * 4 + 128 + 128; // 348 bytes
 
 let _cfgBuf: Uint8Array | null = null;
 let _metricsBuf: Uint8Array | null = null;
@@ -98,8 +98,9 @@ function configToNative(cfg: ChafaConfig): Uint8Array {
     i[17] = cfg.fgOnly; i[18] = cfg.optimizations;
     i[19] = cfg.passthrough; i[20] = cfg.maxFrames;
     f[21] = cfg.speed;
+    i[22] = cfg.pixelFit;
 
-    /* Write symbols string at byte offset 88, fillSymbols at 216 */
+    /* Write symbols string at byte offset 92, fillSymbols at 220 */
     const enc = new TextEncoder();
     const writeStr = (str: string | undefined, off: number) => {
         if (!str) { b[off] = 0; return; }
@@ -108,8 +109,8 @@ function configToNative(cfg: ChafaConfig): Uint8Array {
         for (let j = 0; j < n; j++) b[off + j] = bytes[j]!;
         b[off + n] = 0;
     };
-    writeStr(cfg.symbols, 88);
-    writeStr(cfg.fillSymbols, 216);
+    writeStr(cfg.symbols, 92);
+    writeStr(cfg.fillSymbols, 220);
 
     return b;
 }
@@ -124,6 +125,7 @@ function metricsFromNative(b: ArrayBuffer): CodecMetrics {
         frameCount: i[10]!, frameDelayMs: i[11]!,
         rgbaBytes: i[12]!,
         format: i[13]!, canvasMode: i[14]!, pixelMode: i[15]!, haveAlpha: i[16]!,
+        pixelFit: i[17]!,
     };
 }
 
@@ -269,15 +271,40 @@ export function videoOpen(ctx: number, data: Uint8Array, decodeW: number, decode
     return { handle, metrics: metricsFromNative(m.buffer) };
 }
 
-export function videoNext(ctx: number, handle: number, rgba: Uint8Array): { frameIndex: number; w: number; h: number; ptsSec: number; metrics: CodecMetrics } | null {
+export function videoNext(ctx: number, handle: number, rgba?: Uint8Array): { frameIndex: number; w: number; h: number; ptsSec: number; metrics: CodecMetrics; rgba?: Uint8Array } | null {
     const w = new Int32Array(1), h = new Int32Array(1);
     const pts = new Float64Array(1);
     const m = metricsBuf();
-    const idx = s.codec_video_next(ctx, handle, ptr(rgba), rgba.length,
+
+    /* Zero-copy path: when no caller buffer is provided, the frame is a
+       direct view into the decoder ring buffer. Valid until the next
+       videoNext()/videoSeek()/videoClose() call. */
+    let out: Uint8Array;
+    if (rgba && rgba.length > 0) {
+        out = rgba;
+        const idx = s.codec_video_next(ctx, handle, ptr(rgba), rgba.length,
+            ptr(new Uint8Array(w.buffer)), ptr(new Uint8Array(h.buffer)),
+            ptr(new Uint8Array(pts.buffer)), ptr(m), 0, 0);
+        if (idx < 0) return null;
+        return { frameIndex: idx, w: w[0]!, h: h[0]!, ptsSec: pts[0]!, metrics: metricsFromNative(m.buffer) };
+    }
+
+    const ptrBuf = new Uint8Array(8);
+    const sizeArr = new Int32Array(1);
+    const idx = s.codec_video_next(ctx, handle, 0, 0,
         ptr(new Uint8Array(w.buffer)), ptr(new Uint8Array(h.buffer)),
-        ptr(new Uint8Array(pts.buffer)), ptr(m));
+        ptr(new Uint8Array(pts.buffer)), ptr(m),
+        ptr(ptrBuf), ptr(new Uint8Array(sizeArr.buffer)));
     if (idx < 0) return null;
-    return { frameIndex: idx, w: w[0]!, h: h[0]!, ptsSec: pts[0]!, metrics: metricsFromNative(m.buffer) };
+
+    const framePtr = Number(new BigUint64Array(ptrBuf.buffer, ptrBuf.byteOffset, 1)[0]);
+    const size = sizeArr[0]!;
+    if (framePtr && size > 0) {
+        out = new Uint8Array(toArrayBuffer(framePtr, 0, size));
+    } else {
+        out = new Uint8Array(0);
+    }
+    return { frameIndex: idx, w: w[0]!, h: h[0]!, ptsSec: pts[0]!, metrics: metricsFromNative(m.buffer), rgba: out };
 }
 
 export function videoSeek(ctx: number, handle: number, targetSec: number): void {

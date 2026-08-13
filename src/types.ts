@@ -102,6 +102,29 @@ export const Passthrough = {
     TMUX: 2,
 } as const;
 
+/** Pixel-mode size fitting strategy.
+ *
+ *  Controls how source pixels are matched to the terminal area in
+ *  pixel modes (SIXELS, KITTY, ITERM2). Ignored in symbol mode.
+ *
+ *  In pixel modes the target pixel area is `termW × cellW` by
+ *  `termH × cellH` (default cells 8×16, matching a typical 1:2 font
+ *  aspect, so the output fills the same area as symbol mode).
+ *
+ *  - `NONE` (0) - Hand source pixels to chafa unchanged. Chafa's
+ *    internal scaler fills the target area. Equivalent to letting
+ *    chafa do everything (its CLI behavior).
+ *  - `SCALE` (1) - Pre-scale the source pixels to the target area
+ *    (aspect-preserving fit, centered) before handing them to chafa.
+ *    Chafa then draws 1:1 with no resampling work. Default.
+ *    For video, frames are decoded directly at the target size,
+ *    making this effectively free.
+ */
+export const PixelFit = {
+    NONE: 0,
+    SCALE: 1,
+} as const;
+
 /* ═══════════════════════════════════════════════════════════════════
    ChafaConfig - full canvas configuration
    ═══════════════════════════════════════════════════════════════════ */
@@ -117,9 +140,11 @@ export interface ChafaConfig {
     termW: number;
     /** Canvas height in character cells (rows). Default: 24 */
     termH: number;
-    /** Character cell width in pixels. Controls font aspect ratio. Default: 8 */
+    /** Character cell width in pixels. Used for pixel-mode canvas sizing
+     *  (ignored in symbol mode). Default: 8 */
     cellW: number;
-    /** Character cell height in pixels. Controls font aspect ratio. Default: 8 */
+    /** Character cell height in pixels. Used for pixel-mode canvas sizing
+     *  (ignored in symbol mode). Default: 16 (typical 1:2 font aspect) */
     cellH: number;
     /** Quality/speed tradeoff (0.0–1.0). 0.0 = fastest, 1.0 = best quality.
      *  Chafa CLI defaults to 0.5; our default is 0.0 for speed. */
@@ -154,6 +179,8 @@ export interface ChafaConfig {
     optimizations: number;
     /** Passthrough guard for multiplexers. See {@link Passthrough}. Default: NONE */
     passthrough: number;
+    /** Pixel-mode fit strategy. See {@link PixelFit}. Default: SCALE */
+    pixelFit: number;
     /** Max animation frames to decode. -1 = all frames. Default: -1 */
     maxFrames: number;
     /** Animation playback speed multiplier. 1.0 = native speed. Default: 1.0 */
@@ -211,6 +238,8 @@ export interface CodecMetrics {
     canvasMode: number;
     /** Active pixel mode. See {@link PixelMode} */
     pixelMode: number;
+    /** Active pixel fit strategy. See {@link PixelFit} */
+    pixelFit: number;
     /** Whether the source image contained an alpha channel (1 = yes, 0 = no) */
     haveAlpha: number;
 }
@@ -282,11 +311,15 @@ export interface VideoFrame {
  *  Defaults are tuned for speed (workFactor=0.0, no preprocessing).
  *  For higher quality matching chafa CLI defaults, override:
  *  `{ workFactor: 0.5, preprocessing: 1 }`.
+ *
+ *  In pixel modes the canvas pixel area is `termW × cellW` by
+ *  `termH × cellH` (80×24 -> 640×384 by default), so output fills
+ *  the same terminal area as symbol mode.
  */
 export function defaultConfig(): ChafaConfig {
     return {
         termW: 80, termH: 24,
-        cellW: 8, cellH: 8,
+        cellW: 8, cellH: 16,
         workFactor: 0.0,
         ditherMode: DitherMode.NONE,
         canvasMode: CanvasMode.TRUECOLOR,
@@ -301,9 +334,23 @@ export function defaultConfig(): ChafaConfig {
         fgOnly: 0,
         optimizations: 0x7fffffff,
         passthrough: Passthrough.NONE,
+        pixelFit: PixelFit.SCALE,
         maxFrames: -1,
         speed: 1.0,
         symbols: "",
         fillSymbols: "",
     };
+}
+
+/** Target pixel dimensions for a pixel-mode config.
+ *
+ *  Returns `{ width: termW × cellW, height: termH × cellH }` - the
+ *  pixel area the rendered image will occupy on screen. In symbol
+ *  mode returns the cell counts unchanged.
+ */
+export function pixelCanvasSize(config: ChafaConfig): { width: number; height: number } {
+    if (config.pixelMode === PixelMode.SYMBOLS) {
+        return { width: config.termW, height: config.termH };
+    }
+    return { width: config.termW * config.cellW, height: config.termH * config.cellH };
 }

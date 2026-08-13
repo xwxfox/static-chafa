@@ -10,7 +10,7 @@
  * ## Architecture
  *
  * 1. `codec_video_open()` - opens a video from a memory buffer, probes the
- *    container, finds the best video stream, and initialises a YUV→RGBA
+ *    container, finds the best video stream, and initialises a YUV->RGBA
  *    scaler. Audio metadata is tracked but audio packets are discarded.
  *
  * 2. `codec_video_next()` - returns the next pre-decoded RGBA frame from a
@@ -23,7 +23,7 @@
  *
  * ## Soname fallback
  *
- * Attempted in order: 62 → 61 → 60 → 59 → 58 for each library.
+ * Attempted in order: 62 -> 61 -> 60 -> 59 -> 58 for each library.
  * This covers FFmpeg 7.x (soname 62) through FFmpeg 4.x (soname 58).
  *
  * @see https://ffmpeg.org/doxygen/trunk/index.html
@@ -75,12 +75,16 @@ typedef struct {
     int32_t frame_count, frame_delay_ms;
     int32_t rgba_bytes;
     int32_t format, canvas_mode, pixel_mode, have_alpha;
+    int32_t pixel_fit;
 } CodecMetrics;
 
 /* Provided by codec.c */
 extern void **codec_ctx_get_video_slots(CodecCtx *ctx);
 extern void *codec_ctx_get_video_handle(CodecCtx *ctx, int slot);
 extern void codec_ctx_set_video_handle(CodecCtx *ctx, int slot, void *handle);
+extern void codec_ctx_pixel_fit_box(const CodecCtx *ctx, int src_w, int src_h,
+                                    int *w_out, int *h_out);
+extern int32_t codec_ctx_get_pixel_fit(CodecCtx *ctx);
 
 /* Error codes from codec.c */
 #define ERR_OK 0
@@ -475,15 +479,30 @@ CODEC_EXPORT int codec_video_open(CodecCtx *ctx, char *data, int32_t len,
     if (ff.avcodec_parameters_to_context(vh->codec_ctx, vpar) < 0) goto err;
     if (ff.avcodec_open2(vh->codec_ctx, codec, NULL) < 0) goto err;
 
-    /* Dimensions */
+    /* Dimensions. When no explicit decode size is given, decode directly at
+       the pixel-fit box (termW x cellW by termH x cellH, aspect-preserving)
+       so chafa can draw frames 1:1 with zero extra scaling work. */
     vh->src_w = vpar->width;
     vh->src_h = vpar->height;
-    vh->decode_w = (decode_w > 0 && decode_w < vh->src_w) ? decode_w : vh->src_w;
-    vh->decode_h = (decode_h > 0 && decode_h < vh->src_h) ? decode_h : vh->src_h;
+
+    if (decode_w > 0 && decode_h > 0)
+    {
+        vh->decode_w = decode_w;
+        vh->decode_h = decode_h;
+    }
+    else
+    {
+        int fit_w = vh->src_w, fit_h = vh->src_h;
+        codec_ctx_pixel_fit_box(ctx, vh->src_w, vh->src_h, &fit_w, &fit_h);
+        vh->decode_w = decode_w > 0 ? decode_w : fit_w;
+        vh->decode_h = decode_h > 0 ? decode_h : fit_h;
+    }
 
     /* Ensure even dimensions for YUV subsampling */
     if (vh->decode_w & 1) vh->decode_w++;
     if (vh->decode_h & 1) vh->decode_h++;
+    if (vh->decode_w < 2) vh->decode_w = 2;
+    if (vh->decode_h < 2) vh->decode_h = 2;
 
     /* Duration / FPS */
     AVStream *vstr = vh->fmt_ctx->streams[vh->video_stream_idx];
@@ -502,7 +521,7 @@ CODEC_EXPORT int codec_video_open(CodecCtx *ctx, char *data, int32_t len,
         vh->fps = (double)vstr->nb_frames / vh->duration_sec;
     if (vh->fps <= 0) vh->fps = 30.0;
 
-    /* SwsContext for YUV→RGBA + optional downscale */
+    /* SwsContext for YUV->RGBA + optional downscale */
     vh->sws_ctx = ff.sws_getContext(
         vh->src_w, vh->src_h, vpar->format,
         vh->decode_w, vh->decode_h, AV_PIX_FMT_RGBA,
@@ -585,7 +604,7 @@ static int video_decode_into(VideoHandle *vh)
             continue;
         }
 
-        /* YUV → RGBA + downscale */
+        /* YUV -> RGBA + downscale */
         int idx = vh->pool_head;
         if (!vh->frame_buf[idx]) {
             vh->frame_buf[idx] = ff.av_malloc(vh->decode_h * vh->frame_stride);
@@ -618,9 +637,12 @@ static int video_decode_into(VideoHandle *vh)
 CODEC_EXPORT int32_t codec_video_next(CodecCtx *ctx, int32_t handle,
                          uint8_t *out_rgba, int32_t out_cap,
                          int32_t *out_w, int32_t *out_h,
-                         double *out_pts, CodecMetrics *out)
+                         double *out_pts, CodecMetrics *out,
+                         uint8_t **out_frame_ptr, int32_t *out_frame_size)
 {
     memset(out, 0, sizeof(CodecMetrics));
+    if (out_frame_ptr) *out_frame_ptr = NULL;
+    if (out_frame_size) *out_frame_size = 0;
     if (!ctx || handle < 0 || handle >= 16 || !codec_ctx_get_video_handle(ctx, handle))
     {
         if (out_w) *out_w = 0;
@@ -637,14 +659,20 @@ CODEC_EXPORT int32_t codec_video_next(CodecCtx *ctx, int32_t handle,
     if (vh->pool_count == 0) return -1;
 
     /* Pop head */
-    if (out_rgba && out_cap >= vh->decode_h * vh->frame_stride)
-        memcpy(out_rgba, vh->frame_buf[vh->pool_tail], vh->decode_h * vh->frame_stride);
+    int frame_bytes = vh->decode_h * vh->frame_stride;
+    if (out_rgba && out_cap >= frame_bytes)
+        memcpy(out_rgba, vh->frame_buf[vh->pool_tail], frame_bytes);
+    if (out_frame_ptr)
+        *out_frame_ptr = vh->frame_buf[vh->pool_tail];
+    if (out_frame_size)
+        *out_frame_size = frame_bytes;
     *out_w = vh->decode_w;
     *out_h = vh->decode_h;
     *out_pts = vh->frame_pts[vh->pool_tail];
     out->img_w = vh->decode_w;
     out->img_h = vh->decode_h;
     out->frame_delay_ms = (int32_t)(1000.0 / vh->fps);
+    out->pixel_fit = codec_ctx_get_pixel_fit(ctx);
 
     /* Advance tail */
     vh->pool_tail = (vh->pool_tail + 1) % VIDEO_POOL_SIZE;
@@ -811,12 +839,25 @@ CODEC_EXPORT int32_t codec_video_seek(CodecCtx *ctx, int32_t handle, double targ
     if (vh->seeking) return 0;
     vh->seeking = 1;
 
+    /* Clamp to the valid range. Without this, targets past the end are
+       silently clamped to the last keyframe by the demuxer, and the
+       caller's pts-based feedback loop keeps requesting the same target,
+       making the video appear stuck on (or jump back to) one frame. */
+    double clamped = target_sec;
+    if (clamped < 0.0) clamped = 0.0;
+    if (vh->duration_sec > 0.0)
+    {
+        double max_sec = vh->duration_sec - 0.001;
+        if (max_sec < 0.0) max_sec = 0.0;
+        if (clamped > max_sec) clamped = max_sec;
+    }
+
     AVStream *vstr = vh->fmt_ctx->streams[vh->video_stream_idx];
 
     ff.avcodec_flush_buffers(vh->codec_ctx);
 
     int64_t target_ts = rescale_q_inline(
-        target_sec < 0 ? 0 : (int64_t)(target_sec * AV_TIME_BASE),
+        (int64_t)(clamped * AV_TIME_BASE),
         (AVRational){1, AV_TIME_BASE},
         vstr->time_base);
 
@@ -828,20 +869,15 @@ CODEC_EXPORT int32_t codec_video_seek(CodecCtx *ctx, int32_t handle, double targ
     vh->seeking = 0;
     if (r < 0) return -1;
 
-    /* Clear ring buffer */
-    for (int i = 0; i < VIDEO_POOL_SIZE; i++) {
-        if (vh->frame_buf[i]) {
-            ff.av_free(vh->frame_buf[i]);
-            vh->frame_buf[i] = NULL;
-        }
-    }
+    /* Clear the ring buffer without freeing its slots: JS may hold
+       zero-copy views into them (valid until the next call / close). */
     vh->pool_head = vh->pool_tail = vh->pool_count = 0;
     vh->eof = 0;
 
     /* Resume playback from new position */
     if (vh->playing) {
         vh->playback_start_wall_ms = wall_ms();
-        vh->playback_start_pts = target_sec;
+        vh->playback_start_pts = clamped;
     }
 
     video_decode_into(vh);

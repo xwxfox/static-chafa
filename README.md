@@ -165,13 +165,19 @@ Key config fields:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `termW`, `termH` | number | 80, 24 | Cell grid dimensions |
-| `cellW`, `cellH` | number | 8, 8 | Font aspect ratio |
+| `cellW`, `cellH` | number | 8, 16 | Cell pixel size (pixel modes only; ignored in symbol mode) |
 | `workFactor` | number | 0.0 | Quality/speed (0=fast, 1=best) |
 | `canvasMode` | number | 0 | `CanvasMode.TRUECOLOR` / `INDEXED_256` / ... |
 | `pixelMode` | number | 0 | `PixelMode.SYMBOLS` / `SIXELS` / `KITTY` / `ITERM2` |
+| `pixelFit` | number | 1 | `PixelFit.NONE` (hand pixels to chafa) / `SCALE` (pre-scale to fill `termW × cellW` × `termH × cellH`, default) |
 | `ditherMode` | number | 0 | `DitherMode.NONE` / `ORDERED` / `DIFFUSION` / `NOISE` |
 | `symbols` | string | "" | Chafa CLI selector string (e.g. `"block+border+space-wide"`) |
 | `fillSymbols` | string | "" | Fill symbol map selector string |
+
+In pixel modes the output occupies `termW × cellW` by `termH × cellH` screen pixels
+(640×384 by default), filling the same terminal area as symbol mode. With
+`pixelFit: SCALE` (default) source pixels are pre-scaled to that area, so chafa
+draws 1:1; video frames are decoded directly at the fit size, making this free.
 
 ## CodecMetrics
 
@@ -189,6 +195,7 @@ Returned with every render/decode operation:
 | `rgbaBytes` | Decoded RGBA buffer size |
 | `format` | 0=PNG, 1=JPEG, 2=BMP, 3=GIF, 4=WebP |
 | `canvasMode`, `pixelMode` | Active rendering mode enums |
+| `pixelFit` | Active pixel fit strategy |
 | `haveAlpha` | Source had alpha channel |
 
 ## Architecture

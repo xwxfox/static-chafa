@@ -56,8 +56,10 @@
 #include <string.h>
 #include <setjmp.h>
 #include <time.h>
+#include <math.h>
 #include "chafa.h"
 #include "internal/chafa-canvas-internal.h"
+#include "internal/smolscale/smolscale.h"
 #include <zlib.h>
 
 #include <jpeglib.h>
@@ -131,6 +133,9 @@ static const char *err_string(int code)
 #define MAX_DIM (65536)
 #define MIN_DIM (1)
 
+#define PIXEL_FIT_NONE 0
+#define PIXEL_FIT_SCALE 1
+
 /**
  * @struct CodecConfig
  * @brief Full chafa canvas configuration.
@@ -155,6 +160,7 @@ typedef struct
     int32_t fg_only, optimizations, passthrough;
     int32_t max_frames;
     float speed;
+    int32_t pixel_fit;
     char symbols[128];
     char fill_symbols[128];
 } CodecConfig;
@@ -175,6 +181,7 @@ typedef struct
     int32_t frame_count, frame_delay_ms;
     int32_t rgba_bytes;
     int32_t format, canvas_mode, pixel_mode, have_alpha;
+    int32_t pixel_fit;
 } CodecMetrics;
 
 /* -- decode helpers -- */
@@ -399,7 +406,7 @@ static void config_init(CodecConfig *cfg)
     cfg->term_w = 80;
     cfg->term_h = 24;
     cfg->cell_w = 8;
-    cfg->cell_h = 8;
+    cfg->cell_h = 16;
     cfg->work_factor = 0.0f;
     cfg->alpha_threshold = 127;
     cfg->fg_color = 0xffffff;
@@ -407,6 +414,7 @@ static void config_init(CodecConfig *cfg)
     cfg->speed = 1.0f;
     cfg->max_frames = -1;
     cfg->optimizations = 0x7fffffff; /* CHAFA_OPTIMIZATION_ALL */
+    cfg->pixel_fit = PIXEL_FIT_SCALE;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -418,6 +426,13 @@ typedef enum
     ANIM_GIF,
     ANIM_WEBP
 } AnimType;
+
+/* Reusable buffer for pixel-fit pre-scaling (avoids per-frame allocation). */
+typedef struct
+{
+    uint8_t *buf;
+    int cap;
+} ScaleScratch;
 
 typedef struct
 {
@@ -431,6 +446,9 @@ typedef struct
     int webp_len;
     ChafaCanvas *canvas;
     ChafaCanvasConfig *canvas_cfg;
+    ScaleScratch scratch;
+    int pixel_fit;
+    int kitty_id;               /* 0 = emit without id */
 } AnimHandle;
 
 /**
@@ -449,6 +467,8 @@ typedef struct CodecCtx
     int canvas_valid;       /* 1 when canvas matches cfg and symbols */
     AnimHandle *handles[16];
     void *video_handles[16]; /* VideoHandle* slots (from codec_video.c) */
+    ScaleScratch scratch;   /* pre-scale scratch buffer for static renders */
+    int next_kitty_id;      /* monotonically increasing id for kitty animations */
 } CodecCtx;
 
 /**
@@ -535,6 +555,10 @@ CODEC_EXPORT void codec_ctx_set_video_handle(CodecCtx *ctx, int slot, void *hand
     if (!ctx || slot < 0 || slot >= 16) return;
     ctx->video_handles[slot] = handle;
 }
+CODEC_EXPORT int32_t codec_ctx_get_pixel_fit(CodecCtx *ctx)
+{
+    return ctx ? ctx->cfg.pixel_fit : 0;
+}
 /** @} */
 
 /** @name Video (FFmpeg, optional - fails gracefully without FFmpeg installed) @{ */
@@ -553,6 +577,156 @@ CODEC_EXPORT const char *codec_video_error(void);
 /** @} */
 
 /* -- internal helpers -- */
+
+/* Compute the aspect-preserving fit box for @src_w x @src_h within the
+   canvas' pixel area. Used for pixel-fit pre-scaling and video decode
+   targeting. Writes src dims back unchanged on any error/invalid input. */
+static void compute_fit_box(const ChafaCanvas *canvas, int src_w, int src_h,
+                            int *w_out, int *h_out)
+{
+    *w_out = src_w;
+    *h_out = src_h;
+    if (!canvas || src_w <= 0 || src_h <= 0)
+        return;
+
+    int cw = canvas->width_pixels;
+    int ch = canvas->height_pixels;
+    if (cw <= 0 || ch <= 0)
+        return;
+
+    double s = fmin((double)cw / (double)src_w, (double)ch / (double)src_h);
+    int fw = (int)((double)src_w * s);
+    int fh = (int)((double)src_h * s);
+    if (fw < 1) fw = 1;
+    if (fh < 1) fh = 1;
+    if (fw > MAX_DIM) fw = MAX_DIM;
+    if (fh > MAX_DIM) fh = MAX_DIM;
+    *w_out = fw;
+    *h_out = fh;
+}
+
+/* Exposed for codec_video.c: compute decode target from a config, without
+   a canvas. Mirrors compute_fit_box() using cfg geometry. */
+CODEC_EXPORT void codec_ctx_pixel_fit_box(const CodecCtx *ctx, int src_w, int src_h,
+                                          int *w_out, int *h_out)
+{
+    *w_out = src_w;
+    *h_out = src_h;
+    if (!ctx || src_w <= 0 || src_h <= 0)
+        return;
+
+    const CodecConfig *cfg = &ctx->cfg;
+    if (cfg->pixel_mode == 0 /* SYMBOLS */ || cfg->pixel_fit != PIXEL_FIT_SCALE)
+        return;
+
+    int cell_w = cfg->cell_w > 0 ? cfg->cell_w : 8;
+    int cell_h = cfg->cell_h > 0 ? cfg->cell_h : 16;
+    int cw = cfg->term_w * cell_w;
+    int ch = cfg->term_h * cell_h;
+    if (cw <= 0 || ch <= 0)
+        return;
+
+    double s = fmin((double)cw / (double)src_w, (double)ch / (double)src_h);
+    int fw = (int)((double)src_w * s);
+    int fh = (int)((double)src_h * s);
+    if (fw < 1) fw = 1;
+    if (fh < 1) fh = 1;
+    if (fw > MAX_DIM) fw = MAX_DIM;
+    if (fh > MAX_DIM) fh = MAX_DIM;
+    *w_out = fw;
+    *h_out = fh;
+}
+
+/* Pre-scale src RGBA into @scratch at the canvas fit box. Returns pointer
+   to the pixels to draw and their dims/stride. On failure returns original. */
+static void prescale_if_needed(const ChafaCanvas *canvas, int pixel_fit,
+                               uint8_t *rgba, int w, int h, int stride,
+                               ScaleScratch *scratch,
+                               uint8_t **draw_out, int *draw_w, int *draw_h, int *draw_stride)
+{
+    *draw_out = rgba;
+    *draw_w = w;
+    *draw_h = h;
+    *draw_stride = stride > 0 ? stride : w * 4;
+
+    if (!canvas || !rgba || pixel_fit != PIXEL_FIT_SCALE)
+        return;
+
+    int fw = w, fh = h;
+    compute_fit_box(canvas, w, h, &fw, &fh);
+    if (fw == w && fh == h)
+        return; /* already 1:1 */
+
+    int need = fw * fh * 4;
+    if (!scratch || need <= 0)
+        return;
+
+    if (scratch->cap < need)
+    {
+        free(scratch->buf);
+        scratch->buf = malloc((size_t)need);
+        if (!scratch->buf)
+        {
+            scratch->cap = 0;
+            return;
+        }
+        scratch->cap = need;
+    }
+
+    if (!smol_scale_simple(rgba, SMOL_PIXEL_RGBA8_UNASSOCIATED,
+                           (uint32_t)w, (uint32_t)h,
+                           (uint32_t)(stride > 0 ? stride : w * 4),
+                           scratch->buf, SMOL_PIXEL_RGBA8_UNASSOCIATED,
+                           (uint32_t)fw, (uint32_t)fh, (uint32_t)(fw * 4),
+                           SMOL_NO_FLAGS))
+        return;
+
+    *draw_out = scratch->buf;
+    *draw_w = fw;
+    *draw_h = fh;
+    *draw_stride = fw * 4;
+}
+
+/* Insert "i=<id>," after every kitty image/chunk prefix ("\x1b_G") so
+   animations reuse a single kitty image instead of leaking one per frame.
+   Returns a new string (caller frees), or NULL on failure. */
+static char *inject_kitty_image_id(const char *ansi, int id)
+{
+    static const char prefix[] = "\x1b_G";
+    int n = 0;
+    const char *p;
+
+    if (!ansi || id < 1)
+        return NULL;
+
+    for (p = ansi; (p = strstr(p, prefix)) != NULL; p += 3)
+        n++;
+    if (n == 0)
+        return NULL;
+
+    char idbuf[16];
+    int idlen = snprintf(idbuf, sizeof(idbuf), "i=%d,", id);
+    size_t outlen = strlen(ansi) + (size_t)n * (size_t)idlen + 1;
+    char *out = malloc(outlen);
+    if (!out)
+        return NULL;
+
+    const char *src = ansi;
+    char *dst = out;
+    while ((p = strstr(src, prefix)) != NULL)
+    {
+        size_t seg = (size_t)(p - src);
+        memcpy(dst, src, seg);
+        dst += seg;
+        memcpy(dst, prefix, 3);
+        dst += 3;
+        memcpy(dst, idbuf, (size_t)idlen);
+        dst += idlen;
+        src = p + 3;
+    }
+    strcpy(dst, src);
+    return out;
+}
 
 static ChafaCanvasConfig *make_canvas_config(const CodecConfig *cfg)
 {
@@ -641,14 +815,21 @@ static void fill_canvas_metrics(ChafaCanvas *canvas, CodecMetrics *m)
 
 /* Draw RGBA pixels to canvas, then build ANSI string.
    Fills draw_ms, build_ms, total_ms, img_w, img_h, and canvas metadata in *m.
+   When pixel_fit is SCALE, pre-scales source pixels to the canvas fit box
+   first so chafa draws 1:1 (using @scratch as a reusable buffer).
    Returns allocated string (caller must codec_free). */
 static char *canvas_draw_and_build(ChafaCanvas *canvas, uint8_t *rgba,
                                    int32_t w, int32_t h, int32_t stride,
-                                   CodecMetrics *m)
+                                   CodecMetrics *m, int pixel_fit,
+                                   ScaleScratch *scratch)
 {
     double t0 = now_ms();
+    uint8_t *draw_pixels;
+    int draw_w, draw_h, draw_stride;
+    prescale_if_needed(canvas, pixel_fit, rgba, w, h, stride, scratch,
+                       &draw_pixels, &draw_w, &draw_h, &draw_stride);
     chafa_canvas_draw_all_pixels(canvas, CHAFA_PIXEL_RGBA8_UNASSOCIATED,
-                                 rgba, w, h, stride > 0 ? stride : w * 4);
+                                 draw_pixels, draw_w, draw_h, draw_stride);
     double t1 = now_ms();
     GString *gs = chafa_canvas_print(canvas, NULL);
     double t2 = now_ms();
@@ -659,6 +840,7 @@ static char *canvas_draw_and_build(ChafaCanvas *canvas, uint8_t *rgba,
     m->img_w = w;
     m->img_h = h;
     fill_canvas_metrics(canvas, m);
+    m->pixel_fit = pixel_fit;
 
     char *result = strdup(gs->str);
     g_string_free(gs, 1);
@@ -783,6 +965,7 @@ CODEC_EXPORT void codec_ctx_free(CodecCtx *ctx)
         if (ctx->video_handles[i])
             codec_video_close(ctx, i);
     }
+    free(ctx->scratch.buf);
     free(ctx);
 }
 
@@ -872,7 +1055,8 @@ CODEC_EXPORT char *codec_render(CodecCtx *ctx, char *data, int32_t len,
         return strdup(err_string(ERR_MALLOC));
     }
 
-    char *ansi = canvas_draw_and_build(ctx->canvas, rgba, w, h, w * 4, out);
+    char *ansi = canvas_draw_and_build(ctx->canvas, rgba, w, h, w * 4, out,
+                                       ctx->cfg.pixel_fit, &ctx->scratch);
     free(rgba);
     return ansi;
 }
@@ -892,7 +1076,8 @@ CODEC_EXPORT char *codec_render_rgba(CodecCtx *ctx, uint8_t *rgba,
     out->img_h = h;
     out->frame_count = 1;
     out->rgba_bytes = h * (stride > 0 ? stride : w * 4);
-    return canvas_draw_and_build(ctx->canvas, rgba, w, h, stride > 0 ? stride : w * 4, out);
+    return canvas_draw_and_build(ctx->canvas, rgba, w, h, stride > 0 ? stride : w * 4,
+                                 out, ctx->cfg.pixel_fit, &ctx->scratch);
 }
 
 /* -- matrix: decode + render -> JSON cell grid -- */
@@ -908,6 +1093,7 @@ CODEC_EXPORT char *codec_render_matrix(CodecCtx *ctx, char *data, int32_t len,
     if (!rgba) { *err = ERR_DECODE_FAIL; return strdup("[]"); }
 
     out->frame_count = 1;
+    out->pixel_fit = ctx->cfg.pixel_fit;
 
     if (ctx_ensure_canvas(ctx) != 0)
     {
@@ -944,6 +1130,7 @@ CODEC_EXPORT char *codec_render_matrix_rgba(CodecCtx *ctx, uint8_t *rgba,
     out->img_h = h;
     out->frame_count = 1;
     out->rgba_bytes = h * (stride > 0 ? stride : w * 4);
+    out->pixel_fit = ctx->cfg.pixel_fit;
 
     {
         double t0 = now_ms();
@@ -960,6 +1147,19 @@ CODEC_EXPORT char *codec_render_matrix_rgba(CodecCtx *ctx, uint8_t *rgba,
 /* ══════════════════════════════════════════════════════════════════════
    Animation
    ══════════════════════════════════════════════════════════════════════ */
+
+/* Snapshot pixel-fit and assign a kitty image id (when in kitty mode) so
+   animation frames update one reusable image instead of leaking one each. */
+static void anim_setup_common(CodecCtx *ctx, AnimHandle *ah)
+{
+    ah->pixel_fit = ctx->cfg.pixel_fit;
+    if (ctx->cfg.pixel_mode == CHAFA_PIXEL_MODE_KITTY)
+    {
+        if (ctx->next_kitty_id < 1 || ctx->next_kitty_id > 255)
+            ctx->next_kitty_id = 1;
+        ah->kitty_id = ctx->next_kitty_id++;
+    }
+}
 
 static AnimHandle *anim_create(CodecCtx *ctx, AnimType type, uint8_t *rgba,
                                int frames, int w, int h, uint8_t *raw_buf, int raw_len,
@@ -1109,6 +1309,7 @@ CODEC_EXPORT int32_t codec_anim_open(CodecCtx *ctx, char *data, int32_t len,
             return -1;
         }
         fill_canvas_metrics(ah->canvas, out);
+        anim_setup_common(ctx, ah);
 
         for (int i = 0; i < 16; i++)
             if (!ctx->handles[i])
@@ -1184,6 +1385,7 @@ CODEC_EXPORT int32_t codec_anim_open(CodecCtx *ctx, char *data, int32_t len,
             return -1;
         }
         fill_canvas_metrics(ah->canvas, out);
+        anim_setup_common(ctx, ah);
 
         for (int i = 0; i < 16; i++)
             if (!ctx->handles[i])
@@ -1274,7 +1476,22 @@ CODEC_EXPORT char *codec_anim_render_frame(CodecCtx *ctx, int32_t handle, int32_
     out->frame_count = h->total_frames;
     out->format = (h->type == ANIM_GIF) ? FMT_GIF : FMT_WEBP;
     out->rgba_bytes = h->w * h->h * 4;
-    return canvas_draw_and_build(h->canvas, data, h->w, h->h, h->w * 4, out);
+    char *ansi = canvas_draw_and_build(h->canvas, data, h->w, h->h, h->w * 4, out,
+                                       h->pixel_fit, &h->scratch);
+    if (h->kitty_id >= 1)
+    {
+        const ChafaCanvasConfig *ccfg = chafa_canvas_peek_config(h->canvas);
+        if (chafa_canvas_config_get_pixel_mode(ccfg) == CHAFA_PIXEL_MODE_KITTY)
+        {
+            char *with_id = inject_kitty_image_id(ansi, h->kitty_id);
+            if (with_id)
+            {
+                free(ansi);
+                ansi = with_id;
+            }
+        }
+    }
+    return ansi;
 }
 
 CODEC_EXPORT int32_t codec_anim_rewind(CodecCtx *ctx, int32_t handle)
@@ -1319,6 +1536,7 @@ CODEC_EXPORT void codec_anim_close(CodecCtx *ctx, int32_t handle)
     }
     if (h->canvas)       chafa_canvas_unref(h->canvas);
     if (h->canvas_cfg)   chafa_canvas_config_unref(h->canvas_cfg);
+    free(h->scratch.buf);
     free(h);
     ctx->handles[handle] = NULL;
 }

@@ -19,6 +19,7 @@ typedef struct
     int32_t fg_only, optimizations, passthrough;
     int32_t max_frames;
     float speed;
+    int32_t pixel_fit;
     char symbols[128];
     char fill_symbols[128];
 } CodecConfig;
@@ -31,6 +32,7 @@ typedef struct
     int32_t frame_count, frame_delay_ms;
     int32_t rgba_bytes;
     int32_t format, canvas_mode, pixel_mode, have_alpha;
+    int32_t pixel_fit;
 } CodecMetrics;
 
 typedef struct CodecCtx CodecCtx;
@@ -220,7 +222,7 @@ static void read_config(napi_env env, napi_value obj, CodecConfig *cfg)
     cfg->term_w = 80;
     cfg->term_h = 24;
     cfg->cell_w = 8;
-    cfg->cell_h = 8;
+    cfg->cell_h = 16;
     cfg->work_factor = 0.0f;
     cfg->alpha_threshold = 127;
     cfg->fg_color = 0xffffff;
@@ -228,6 +230,7 @@ static void read_config(napi_env env, napi_value obj, CodecConfig *cfg)
     cfg->speed = 1.0f;
     cfg->max_frames = -1;
     cfg->optimizations = 0x7fffffff;
+    cfg->pixel_fit = 1; /* SCALE */
 
     int32_t iv;
     double dv;
@@ -254,6 +257,7 @@ static void read_config(napi_env env, napi_value obj, CodecConfig *cfg)
     if (read_int32(env, obj, "passthrough", &iv)) cfg->passthrough = iv;
     if (read_int32(env, obj, "maxFrames", &iv)) cfg->max_frames = iv;
     if (read_double(env, obj, "speed", &dv)) cfg->speed = (float)dv;
+    if (read_int32(env, obj, "pixelFit", &iv)) cfg->pixel_fit = iv;
 
     read_string(env, obj, "symbols", cfg->symbols, sizeof(cfg->symbols));
     read_string(env, obj, "fillSymbols", cfg->fill_symbols, sizeof(cfg->fill_symbols));
@@ -289,6 +293,7 @@ static napi_value create_metrics(napi_env env, CodecMetrics *m)
     SET_INT("canvasMode", canvas_mode);
     SET_INT("pixelMode", pixel_mode);
     SET_INT("haveAlpha", have_alpha);
+    SET_INT("pixelFit", pixel_fit);
 
 #undef SET_DOUBLE
 #undef SET_INT
@@ -648,7 +653,8 @@ extern int32_t codec_video_open(CodecCtx *ctx, char *data, int32_t len,
     int32_t decode_w, int32_t decode_h, CodecMetrics *out, int32_t *err);
 extern int32_t codec_video_next(CodecCtx *ctx, int32_t handle,
     uint8_t *out_rgba, int32_t out_cap, int32_t *out_w, int32_t *out_h,
-    double *out_pts, CodecMetrics *out);
+    double *out_pts, CodecMetrics *out,
+    uint8_t **out_frame_ptr, int32_t *out_frame_size);
 extern int32_t codec_video_seek(CodecCtx *ctx, int32_t handle, double target_sec);
 extern int32_t codec_video_info(CodecCtx *ctx, int32_t handle,
     int32_t *out_w, int32_t *out_h, double *out_duration, double *out_fps,
@@ -693,6 +699,8 @@ static napi_value chafa_video_open(napi_env env, napi_callback_info info)
 }
 
 /* -- chafaVideoNext(ctx, handle) -> { rgba: Buffer, w, h, ptsSec, frameIndex, metrics } -- */
+/* Zero-copy: rgba is a view into the decoder ring buffer. Valid until the
+   next videoNext()/seek()/close() call on the same video. */
 static napi_value chafa_video_next(napi_env env, napi_callback_info info)
 {
     size_t argc = 2;
@@ -705,17 +713,14 @@ static napi_value chafa_video_next(napi_env env, napi_callback_info info)
     int32_t handle;
     napi_get_value_int32(env, argv[1], &handle);
 
-    /* Pre-allocate a large buffer */
-    int32_t cap = 256 * 1024 * 1024;
-    uint8_t *rgba = malloc(cap);
-    if (!rgba) { napi_throw_error(env, NULL, "malloc failed"); return NULL; }
-
     int32_t w = 0, h = 0;
     double pts = 0;
     CodecMetrics m;
-    int32_t idx = codec_video_next(ctx, handle, rgba, cap, &w, &h, &pts, &m);
+    uint8_t *frame_ptr = NULL;
+    int32_t frame_size = 0;
+    int32_t idx = codec_video_next(ctx, handle, NULL, 0, &w, &h, &pts, &m,
+                                   &frame_ptr, &frame_size);
     if (idx < 0) {
-        free(rgba);
         napi_value nul; napi_get_null(env, &nul); return nul;
     }
 
@@ -723,7 +728,20 @@ static napi_value chafa_video_next(napi_env env, napi_callback_info info)
     napi_create_object(env, &result);
 
     size_t needed = (size_t)h * (size_t)w * 4;
-    napi_create_buffer_copy(env, needed, rgba, NULL, &buf_val);
+    if (frame_ptr && frame_size >= (int32_t)needed)
+    {
+        /* External buffer with no finalizer: the ring buffer owns the memory. */
+        napi_create_external_buffer(env, needed, frame_ptr, NULL, NULL, &buf_val);
+    }
+    else
+    {
+        /* Defensive fallback (should never happen): owned buffer. */
+        uint8_t *copy = malloc(needed);
+        if (copy)
+            napi_create_external_buffer(env, needed, copy, rgba_buffer_finalize, NULL, &buf_val);
+        else
+            napi_get_null(env, &buf_val);
+    }
     napi_set_named_property(env, result, "rgba", buf_val);
 
     napi_create_int32(env, w, &val);
@@ -736,7 +754,6 @@ static napi_value chafa_video_next(napi_env env, napi_callback_info info)
     napi_set_named_property(env, result, "frameIndex", val);
     napi_set_named_property(env, result, "metrics", create_metrics(env, &m));
 
-    free(rgba);
     return result;
 }
 
