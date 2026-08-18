@@ -114,15 +114,19 @@ export MAKEFLAGS="-j${NPROC}"
 # -- Target config --
 case "${TARGET}" in
     native)
-        ZIG_CC="zig cc"; ZIG_CXX="zig c++"
+        if [ "$(uname -s)" = "Darwin" ]; then
+            ZIG_CC="zig cc -target aarch64-macos -isysroot $(xcrun --show-sdk-path)"
+            ZIG_CXX="zig c++ -target aarch64-macos -isysroot $(xcrun --show-sdk-path)"
+        else
+            ZIG_CC="zig cc"; ZIG_CXX="zig c++"
+        fi
         HOST_TRIPLET=""; ZIG_TARGET=""
         if ${OS_WINDOWS}; then
             SHARED_EXT="dll"; CROSS=false; PLAT_PKG="win32-x64"
         else
-            SHARED_EXT="so"; CROSS=false
             case "${HOST_OS}" in
-                Darwin) PLAT_PKG="darwin-arm64" ;;
-                *) PLAT_PKG="linux-x64" ;;
+                Darwin) SHARED_EXT="dylib"; CROSS=false; PLAT_PKG="darwin-arm64" ;;
+                *) SHARED_EXT="so"; CROSS=false; PLAT_PKG="linux-x64" ;;
             esac
         fi
         ;;
@@ -175,6 +179,9 @@ CFLAGS="-O3 -g0 -fPIC -ffunction-sections -fdata-sections \
   -Wno-missing-field-initializers -Wno-unused-but-set-variable \
   -Wno-cast-qual -Wno-format-security -Wno-deprecated-declarations \
   -Wno-pointer-sign -Wno-incompatible-pointer-types"
+# macOS as build host requires extra handling
+[ "${TARGET}" = "native" ] && [ "$(uname -s)" = "Darwin" ] && CFLAGS="${CFLAGS} -isysroot $(xcrun --show-sdk-path)"
+
 [ "${DEBUG:-0}" = "1" ] && CFLAGS="${CFLAGS/-g0/-g}"
 
 INCLUDES="-I${VENDOR} -I${SRC_DIR}/vendor/ffmpeg -I${CHAFA_ORIG} -I${CHAFA_ORIG}/internal -I${CHAFA_ORIG}/internal/smolscale"
@@ -192,6 +199,20 @@ else
 fi
 
 # -- Deps (bundled static image libs for the target) --
+
+# When cross-compiling to a mingw host, autotools' libtool assumes any
+# non-cl compiler is MSVC and emits `lib -OUT:$oldlib$oldobjs$old_deplibs`
+# archive commands. `lib` doesn't exist outside Windows (so the build dies
+# with "lib: command not found" on macOS/Linux). Replace it with GNU ar and
+# restore the .a extension so the static archives build on any host.
+patch_mingw_libtool() {
+    [ -f libtool ] || return 0
+    sed -i.bak \
+        -e 's|^old_archive_cmds="lib -OUT:\\$oldlib\\$oldobjs\\$old_deplibs"$|old_archive_cmds="zig ar rcs \\$oldlib \\$oldobjs"|' \
+        -e 's/^libext=lib$/libext=a/' \
+        libtool
+}
+
 build_cross_deps() {
     if [ -f "${DEPS_DIR}/lib/libz.a" ] && [ -f "${DEPS_DIR}/lib/libpng16.a" ] && \
        [ -f "${DEPS_DIR}/lib/libjpeg.a" ] && [ -f "${DEPS_DIR}/lib/libwebp.a" ]; then
@@ -201,6 +222,7 @@ build_cross_deps() {
         return 0
     fi
     echo ""; echo "=== Building static deps for ${TARGET} ==="
+
     if ! command -v make >/dev/null 2>&1; then
         echo "ERROR: 'make' is required to build the bundled deps." >&2
         case "${HOST_OS}" in
@@ -212,14 +234,27 @@ build_cross_deps() {
     export AR="zig ar"; export RANLIB="zig ranlib"; export STRIP="zig strip"
     local CFG="--enable-static --disable-shared --prefix=${DEPS_DIR}"
     [ -n "${HOST_TRIPLET}" ] && CFG="--host=${HOST_TRIPLET} ${CFG}"
+    case "${HOST_TRIPLET}" in *mingw*) PATCH_MINGW=true ;; *) PATCH_MINGW=false ;; esac
 
     if [ ! -f "${DEPS_DIR}/lib/libz.a" ]; then
         echo "--- zlib ---"
         [ ! -f "${DEPS_SRC}/zlib-1.3.1.tar.gz" ] && fetch_url "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz" "${DEPS_SRC}/zlib-1.3.1.tar.gz"
         tar xzf "${DEPS_SRC}/zlib-1.3.1.tar.gz" -C "${DEPS_BUILD}"
         cd "${DEPS_BUILD}/zlib-1.3.1"
+
+        CC="${ZIG_CC} -fPIC -O3 -g0" \
+        AR="zig ar" \
+        RANLIB="zig ranlib" \
         ./configure --static --prefix="${DEPS_DIR}"
-        make && make install; echo "zlib OK"
+
+        # Patch makefile to use zig ar instead of system ar, and to use 'rcs' flags for ar
+        # fixes cross-comp on macos (where it wouldve used system libtool which ofc wouldnt work because cross comp doesnt emit mach-o objects)
+        sed -i.bak 's/^AR *=.*/AR = zig ar/' Makefile
+        sed -i.bak 's/^ARFLAGS *=.*/ARFLAGS = rcs/' Makefile
+        make libz.a
+        make install
+
+        echo "zlib OK"
     fi
     if [ ! -f "${DEPS_DIR}/lib/libpng16.a" ]; then
         echo "--- libpng ---"
@@ -227,6 +262,13 @@ build_cross_deps() {
         rm -rf "${DEPS_BUILD}/libpng-1.6.43"; tar xzf "${DEPS_SRC}/libpng-1.6.43.tar.gz" -C "${DEPS_BUILD}"
         cd "${DEPS_BUILD}/libpng-1.6.43"
         CPPFLAGS="-I${DEPS_DIR}/include" LDFLAGS="-L${DEPS_DIR}/lib" ./configure ${CFG}
+        ${PATCH_MINGW} && patch_mingw_libtool
+        
+        # Patch makefile to use zig ar instead of system ar, and to use 'rcs' flags for ar
+        # fixes cross-comp on macos (where it wouldve used system libtool which ofc wouldnt work because cross comp doesnt emit mach-o objects)
+        sed -i.bak 's/^AR *=.*/AR = zig ar/' Makefile
+        sed -i.bak 's/^ARFLAGS *=.*/ARFLAGS = rcs/' Makefile
+
         make && make install; echo "libpng OK"
     fi
     if [ ! -f "${DEPS_DIR}/lib/libjpeg.a" ]; then
@@ -235,6 +277,13 @@ build_cross_deps() {
         rm -rf "${DEPS_BUILD}/jpeg-9f"; tar xzf "${DEPS_SRC}/jpegsrc.v9f.tar.gz" -C "${DEPS_BUILD}"
         cd "${DEPS_BUILD}/jpeg-9f"
         ./configure ${CFG}
+        ${PATCH_MINGW} && patch_mingw_libtool
+        
+        # Patch makefile to use zig ar instead of system ar, and to use 'rcs' flags for ar
+        # fixes cross-comp on macos (where it wouldve used system libtool which ofc wouldnt work because cross comp doesnt emit mach-o objects)
+        sed -i.bak 's/^AR *=.*/AR = zig ar/' Makefile
+        sed -i.bak 's/^ARFLAGS *=.*/ARFLAGS = rcs/' Makefile
+
         make
         mkdir -p "${DEPS_DIR}/lib" "${DEPS_DIR}/include" "${DEPS_DIR}/bin" "${DEPS_DIR}/share/man/man1"
         cp .libs/libjpeg.a "${DEPS_DIR}/lib/"; cp *.h "${DEPS_DIR}/include/"; echo "libjpeg OK"
@@ -245,6 +294,13 @@ build_cross_deps() {
         rm -rf "${DEPS_BUILD}/libwebp-1.4.0"; tar xzf "${DEPS_SRC}/libwebp-1.4.0-release.tar.gz" -C "${DEPS_BUILD}"
         cd "${DEPS_BUILD}/libwebp-1.4.0"
         ./configure ${CFG} --disable-gl --disable-sdl --disable-png --disable-jpeg --disable-tiff --disable-gif --disable-wic
+        ${PATCH_MINGW} && patch_mingw_libtool
+        
+        # Patch makefile to use zig ar instead of system ar, and to use 'rcs' flags for ar
+        # fixes cross-comp on macos (where it wouldve used system libtool which ofc wouldnt work because cross comp doesnt emit mach-o objects)
+        sed -i.bak 's/^AR *=.*/AR = zig ar/' Makefile
+        sed -i.bak 's/^ARFLAGS *=.*/ARFLAGS = rcs/' Makefile
+
         make
         cp src/.libs/libwebp.a "${DEPS_DIR}/lib/"
         cp src/demux/.libs/libwebpdemux.a "${DEPS_DIR}/lib/"

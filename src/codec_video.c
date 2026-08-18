@@ -203,6 +203,15 @@ static const char *SONAME_AVCODEC[]  = {
 #ifdef _WIN32
     "avcodec-63.dll", "avcodec-62.dll", "avcodec-61.dll", "avcodec-60.dll",
     "avcodec-59.dll", "avcodec-58.dll", NULL
+#elif defined(__APPLE__)
+    "/opt/homebrew/lib/libavcodec.63.dylib",
+    "/opt/homebrew/lib/libavcodec.62.dylib",
+    "/opt/homebrew/lib/libavcodec.61.dylib",
+    "/opt/homebrew/lib/libavcodec.60.dylib",
+    "/opt/homebrew/lib/libavcodec.59.dylib",
+    "/opt/homebrew/lib/libavcodec.58.dylib",
+    "/opt/homebrew/lib/libavcodec.dylib",
+    NULL
 #else
     "libavcodec.so.63", "libavcodec.so.62", "libavcodec.so.61", "libavcodec.so.60",
     "libavcodec.so.59", "libavcodec.so.58", NULL
@@ -212,6 +221,15 @@ static const char *SONAME_AVFORMAT[] = {
 #ifdef _WIN32
     "avformat-63.dll", "avformat-62.dll", "avformat-61.dll", "avformat-60.dll",
     "avformat-59.dll", "avformat-58.dll", NULL
+#elif defined(__APPLE__)
+    "/opt/homebrew/lib/libavformat.63.dylib",
+    "/opt/homebrew/lib/libavformat.62.dylib",
+    "/opt/homebrew/lib/libavformat.61.dylib",
+    "/opt/homebrew/lib/libavformat.60.dylib",
+    "/opt/homebrew/lib/libavformat.59.dylib",
+    "/opt/homebrew/lib/libavformat.58.dylib",
+    "/opt/homebrew/lib/libavformat.dylib",
+    NULL
 #else
     "libavformat.so.63", "libavformat.so.62", "libavformat.so.61", "libavformat.so.60",
     "libavformat.so.59", "libavformat.so.58", NULL
@@ -221,6 +239,15 @@ static const char *SONAME_AVUTIL[] = {
 #ifdef _WIN32
     "avutil-61.dll", "avutil-60.dll", "avutil-59.dll", "avutil-58.dll",
     "avutil-57.dll", "avutil-56.dll", NULL
+#elif defined(__APPLE__)
+    "/opt/homebrew/lib/libavutil.61.dylib",
+    "/opt/homebrew/lib/libavutil.60.dylib",
+    "/opt/homebrew/lib/libavutil.59.dylib",
+    "/opt/homebrew/lib/libavutil.58.dylib",
+    "/opt/homebrew/lib/libavutil.57.dylib",
+    "/opt/homebrew/lib/libavutil.56.dylib",
+    "/opt/homebrew/lib/libavutil.dylib",
+    NULL
 #else
     "libavutil.so.61", "libavutil.so.60", "libavutil.so.59", "libavutil.so.58",
     "libavutil.so.57", "libavutil.so.56", NULL
@@ -230,6 +257,15 @@ static const char *SONAME_SWSCALE[] = {
 #ifdef _WIN32
     "swscale-10.dll", "swscale-9.dll", "swscale-8.dll", "swscale-7.dll", "swscale-6.dll",
     "swscale-5.dll", NULL
+#elif defined(__APPLE__)
+    "/opt/homebrew/lib/libswscale.10.dylib",
+    "/opt/homebrew/lib/libswscale.9.dylib",
+    "/opt/homebrew/lib/libswscale.8.dylib",
+    "/opt/homebrew/lib/libswscale.7.dylib",
+    "/opt/homebrew/lib/libswscale.6.dylib",
+    "/opt/homebrew/lib/libswscale.5.dylib",
+    "/opt/homebrew/lib/libswscale.dylib",
+    NULL
 #else
     "libswscale.so.10", "libswscale.so.9", "libswscale.so.8", "libswscale.so.7",
     "libswscale.so.6", "libswscale.so.5", NULL
@@ -318,6 +354,10 @@ fail:
             "ffmpeg.exe builds (e.g. gyan.dev 'full_build') ship no DLLs and cannot be used. "
             "Download e.g. ffmpeg-master-latest-win64-gpl-shared.zip from "
             "https://github.com/BtbN/FFmpeg-Builds/releases and add its bin\\ directory to PATH.");
+#elif defined(__APPLE__)
+        snprintf(ff.error_msg, sizeof(ff.error_msg),
+            "FFmpeg libraries not found in /opt/homebrew/lib (Apple Silicon Homebrew). "
+            "Install with: brew install ffmpeg");
 #else
         snprintf(ff.error_msg, sizeof(ff.error_msg),
             "FFmpeg libraries not found. Install: sudo apt install libavcodec62 libavformat62 libavutil60 libswscale8");
