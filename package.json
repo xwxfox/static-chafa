@@ -11,6 +11,9 @@
     "platforms/darwin-arm64",
     "platforms/win32-x64"
   ],
+  "repository": {
+    "url": "https://github.com/xwxfox/static-chafa"
+  },
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.cts",

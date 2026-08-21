@@ -1,0 +1,22 @@
+Chafa
+=====
+
+Project:
+Chafa
+
+Upstream:
+https://github.com/hpjansson/chafa
+
+Local source directory:
+/home/dev/repos/chafa-ts-multirt/chafa-git/chafa
+
+Local repository directory:
+/home/dev/repos/chafa-ts-multirt/chafa-git
+
+The source was obtained by extracting a Chafa source archive.
+
+The build currently obtains Chafa from the GitHub master branch unless
+CHAFA_SRC is explicitly provided.
+
+IMPORTANT:
+The exact upstream Git commit MUST be recorded before making a release.

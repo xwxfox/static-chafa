@@ -1,6 +1,24 @@
 # static-chafa
 
-**Zero-dependency terminal image rendering.** Decodes PNG, JPEG, BMP, GIF, and WebP (static + animated) in native C, renders to ANSI terminal art using the [chafa](https://hpjansson.org/chafa/) engine, and returns strings to JavaScript. Ships as a Node.js NAPI native addon with platform-specific binaries.
+**Fast native terminal image rendering for Node.js.**
+
+`static-chafa` brings the [Chafa](https://hpjansson.org/chafa/) terminal
+graphics engine to Node.js through a native N-API addon.
+
+It decodes PNG, JPEG, BMP, GIF, and WebP images in native code, renders them
+using Chafa's terminal graphics algorithms, and returns ANSI/terminal escape
+sequences directly to JavaScript.
+
+It also provides animated GIF/WebP playback, optional FFmpeg-backed video
+playback, terminal capability detection, raw RGBA access, rendering metrics,
+and a high-level TypeScript API.
+
+> **Licensing note:** `static-chafa` combines original MIT-licensed code with
+> third-party components under their own licenses. In particular, Chafa
+> remains licensed under LGPL-3.0-or-later. See
+> [Attribution & Licensing](#attribution--licensing) and
+> [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+
 
 ```ts
 import Chafa, { CanvasMode, DitherMode } from "static-chafa";
@@ -16,11 +34,10 @@ chafa.destroy();
 
 - **5 image formats** - PNG, JPEG, BMP, GIF, WebP (all decoded in C via libpng/libjpeg/libwebp/stb_image)
 - **Animation** - GIF and WebP frame-by-frame playback with `openAnimation()` / `next()` / `renderFrame()`
-- **Full chafa config** - 22 config fields covering canvas mode, pixel mode, dithering, color space, symbol selectors, and more
 - **Rich metrics** - per-operation timing (parse/draw/build/total), image dimensions, canvas dimensions, RGBA buffer size
 - **Decode once, render many** - pre-decode to raw RGBA with `decode()`, render with multiple configs via `renderRgba()`
+- **Optional video playback** through dynamically loaded FFmpeg libraries.
 - **Cell matrix** - access the raw character grid as JSON with `renderMatrix()`
-- **Using keyword** - `Symbol.dispose` on Chafa, ChafaImage, and ChafaAnimation
 - **Zero runtime deps** - chafa is compiled verbatim with a complete GLib replacement layer (`vendor/chafa/glib_mini.h`)
 - **Cross-platform** - linux-x64, linux-arm64, darwin-arm64, win32-x64 via `zig cc`
 
@@ -317,13 +334,59 @@ bun run playground/tuner.ts --resume   # continue from checkpoint
 bun run playground/tuner.ts --silent --hours 0.01   # quick smoke test
 ```
 
-### Maintenance
+## Attribution & Licensing
 
-When chafa updates, only the vendor layer needs expansion (see [VENDOR.md](VENDOR.md)):
-- New `.c` files -> add to `CHAFA_FILES` in `build.sh`
-- New GLib includes -> create stub headers
-- New GLib functions -> implement in `glib_mini.h`
+This project is built on the work of several excellent open-source projects. Huge thanks to their authors and contributors.
 
-## License
+### Chafa
 
-MIT
+The core terminal graphics functionality is derived from **Chafa**, by Hans Petter Jansson and contributors.
+
+Chafa is licensed under the **GNU Lesser General Public License, version 3 or later (LGPL-3.0-or-later)**.
+
+This project contains modified and/or adapted Chafa code. Those portions remain available under the LGPL-3.0-or-later.
+
+* Upstream: https://github.com/hpjansson/chafa
+* License: LGPL-3.0-or-later
+* Copyright: Hans Petter Jansson and Chafa contributors
+
+### chafa-wasm
+
+This project also takes inspiration from and, where applicable, incorporates TypeScript API/type definitions from **chafa-wasm**, maintained by Héctor Molinero Fernández.
+
+chafa-wasm is licensed under the **LGPL-3.0**.
+
+* Upstream: https://github.com/hectorm/chafa-wasm
+* License: LGPL-3.0
+* Copyright: Héctor Molinero Fernández and contributors
+
+Where this project contains material derived from chafa-wasm, the applicable upstream license and copyright notices are preserved.
+
+### Other third-party software
+
+This project also incorporates or uses software from:
+
+* zlib
+* libpng
+* Independent JPEG Group (IJG) JPEG
+* WebP
+* stb_image
+* Node.js / N-API
+* FFmpeg headers
+
+Each component remains subject to its respective license.
+
+See [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) for the complete attribution and licensing information.
+
+### License for this project
+
+Original code written for this project is released under the **MIT License**.
+
+Third-party and derivative portions are **not** relicensed under MIT and remain under their respective upstream licenses.
+
+See:
+
+* [`LICENSE.md`](./LICENSE.md) - MIT License for original project code
+* [`COPYING.LESSER`](./COPYING.LESSER) - GNU LGPLv3
+* [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md) - third-party attribution and license information
+* [`licenses/`](./licenses/) - copies of applicable third-party license texts

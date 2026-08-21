@@ -1,0 +1,16 @@
+Node.js / Node-API headers
+
+Vendored headers:
+  js_native_api.h
+  js_native_api_types.h
+  node_api.h
+  node_api_types.h
+
+Upstream:
+https://github.com/nodejs/node
+
+These files are Node.js / Node-API headers used to implement the native
+Node.js addon interface.
+
+The exact Node.js source revision from which these headers were obtained
+should be recorded before release.

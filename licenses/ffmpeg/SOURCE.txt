@@ -1,0 +1,12 @@
+FFmpeg headers
+
+Upstream:
+https://ffmpeg.org/
+https://github.com/FFmpeg/FFmpeg
+
+This repository distributes FFmpeg API headers but does not distribute
+FFmpeg runtime libraries.
+
+The runtime FFmpeg libraries are loaded dynamically from the user's
+environment. Their licensing depends on the particular FFmpeg build
+provided by the user.
